@@ -5,6 +5,17 @@ config.env
 # Output folders
 output/
 outputs/
+comprehensive_results/
+comprehensive_output/
+
+# Cache directories
+comprehensive_cache/
+tahoe_cache/
+*_cache/
+
+# Log files
+*.log
+main_pipeline.log
 
 # Python
 __pycache__/

@@ -198,3 +198,14 @@ Arc Institute's State model for predicting cellular responses to perturbations, 
 - **State Model**: Requires `arc-state` CLI tool in PATH
 - **Gene Validation**: Uses Ensembl REST API with fallback if network fails
 - **Memory Usage**: Large datasets cached efficiently using streaming
+
+## Core Pipeline Files
+
+The main pipeline consists of these essential components:
+- **`main.py`**: Main pipeline entry point - the primary script to use
+- **`standardized_genomic_analyzer.py`**: Core analysis engine used by main.py
+- **`tahoe_100M_loader.py`**: Real transcriptome data loader used by main.py
+- **`state_model_client.py`**: State model integration used by main.py
+- **`src/alphagenome/`**: Core AlphaGenome library modules
+
+**Usage**: Use `main.py` for all genomic analysis. It provides comprehensive analysis across all ontologies and cell lines.
