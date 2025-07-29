@@ -21,7 +21,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Code Architecture
 
 ### Core Structure
-The codebase is organized into five main modules under `src/alphagenome/`:
+The codebase consists of a comprehensive genomic analysis pipeline and the core AlphaGenome library:
+
+**Main Pipeline Components:**
+- `main.py`: Pipeline orchestrator and entry point
+- `standardized_genomic_analyzer.py`: Gene-agnostic analysis engine
+- `tahoe_100M_loader.py`: Real transcriptome data from 50 cancer cell lines
+- `state_model_client.py`: Clean State model integration components
+
+**Core AlphaGenome Library** (`src/alphagenome/`):
 
 1. **`data/`** - Core data structures and utilities for genomic data
    - `genome.py`: Fundamental classes (Interval, Variant, Strand)
@@ -67,6 +75,12 @@ The codebase is organized into five main modules under `src/alphagenome/`:
 - anndata for genomics data structures
 - Custom tensor utilities for efficient data handling
 
+### Extended Pipeline Dependencies
+- **datasets**: HuggingFace datasets library for Tahoe-100M access (`pip install datasets`)
+- **arc-state**: Arc Institute State model CLI (`uv tool install arc-state`)
+- **scanpy**: Single-cell analysis tools for transcriptome processing
+- **yaml**: Configuration file parsing for State model setup
+
 ### API Integration
 The client connects to Google DeepMind's AlphaGenome API service. Key supported sequence lengths are defined in `dna_client.py`: 2KB, 16KB, 100KB, 500KB, and 1MB.
 
@@ -81,30 +95,32 @@ The client connects to Google DeepMind's AlphaGenome API service. Key supported 
 - Analyzes DNA sequences up to 1 million base pairs
 - State-of-the-art performance on genomic prediction benchmarks
 
-### TF Prediction Tool (TF_prediction_test.py)
-A comprehensive script for transcription factor binding predictions with the following features:
+### Comprehensive Genomic Analysis Pipeline (main.py)
+The main production pipeline combining AlphaGenome, State model, and Tahoe-100M for comprehensive genomic analysis:
 
 **Basic Usage:**
-- Single gene analysis: `python3 TF_prediction_test.py --gene TP53`
-- Interactive mode: `python3 TF_prediction_test.py --interactive`
-- Custom regions: `python3 TF_prediction_test.py --gene BRCA1 --region promoter`
+- Single gene analysis: `python3 main.py --gene TP53`
+- Interactive mode: `python3 main.py --interactive`
+- Batch analysis: `python3 main.py --genes TP53,BRCA1,CLDN18`
 
-**Comprehensive Multi-Tissue Analysis:**
-- Full ontology analysis: `python3 TF_prediction_test.py --gene TP53 --comprehensive`
-- Limited analysis: `python3 TF_prediction_test.py --gene BRCA1 --comprehensive --max-ontologies 50 --batch-size 10`
+**Key Features:**
+- **Gene-agnostic**: Works with ANY human gene symbol
+- **Comprehensive coverage**: Uses ALL 50 cancer cell lines from Tahoe-100M
+- **Real data only**: No synthetic or placeholder data
+- **All ontologies**: Analyzes across ALL available AlphaGenome ontologies
+- **Standardized output**: Consistent CSV format for all analyses
 
-**Features:**
-- Automated gene coordinate lookup via Ensembl REST API
-- Support for 163 different tissue/cell type ontologies (CL, EFO, UBERON, CLO, NTR)
-- Batch processing to handle API rate limits
-- Comprehensive CSV export with statistical analysis
-- Visualization with automatic filtering for display
-- Timestamped output files in `output/` folder
+**Architecture:**
+- `main.py`: Main entry point and pipeline orchestrator
+- `standardized_genomic_analyzer.py`: Core analysis engine
+- `tahoe_100M_loader.py`: Real transcriptome data loader (50 cancer cell lines)
+- `state_model_client.py`: Clean State model integration components
 
-**Output Files:**
-- `*_comprehensive_tf_results.csv`: Complete results across all ontologies
-- `*_comprehensive_tf_results_summary.csv`: Top 5 TFs per ontology
-- `*_tf_binding.png`: Visualization plots
+**Output:**
+- Timestamped CSV files in `comprehensive_results/` directory
+- Combined AlphaGenome + State model predictions
+- Analysis statistics and metadata in JSON format
+- Comprehensive logging to `main_pipeline.log`
 
 ## Project Resources
 
@@ -124,3 +140,61 @@ A comprehensive script for transcription factor binding predictions with the fol
 - **Code Issues**: Submit on GitHub Issues
 - **General Questions**: Use community forum (faster response)
 - **Direct Contact**: alphagenome@google.com (may have delays due to volume)
+
+## Arc Institute State Model Integration
+
+### State Model Overview
+Arc Institute's State model for predicting cellular responses to perturbations, integrated with AlphaGenome genomic predictions through `state_model_client.py`.
+
+**Key Capabilities:**
+- Predict cellular responses to drugs, cytokines, and genetic perturbations
+- State Embedding (SE-600M): 705M parameter model for transcriptome embeddings
+- State Transition model: Bidirectional transformer for cellular response prediction
+- Integration with AlphaGenome for genomic variant → cellular response analysis
+
+### Pipeline Components
+- **`main.py`**: Main comprehensive analysis pipeline
+  - Usage: `python3 main.py --gene TP53` (single gene analysis)
+  - Usage: `python3 main.py --interactive` (interactive mode)
+  - Usage: `python3 main.py --genes TP53,BRCA1,CLDN18` (batch analysis)
+  
+- **`state_model_client.py`**: State model integration components
+  - Contains `StatePredictionClient` and `AlphaGenomeStateAnalyzer` classes
+  - Handles real transcriptome data loading from Tahoe-100M
+
+### Model Setup
+- SE-600M model downloaded from HuggingFace (`arcinstitute/SE-600M`)
+- Installed via `uv tool install arc-state`
+- Model path configurable in `StatePredictionClient` (default: `state/models/SE-600M/`)
+- **License**: Non-commercial use only (Arc Research Institute license)
+
+### Tahoe-100M Dataset Integration
+- **Dataset**: World's largest single-cell dataset (100M cells, 50 cancer cell lines)
+- **Coverage**: Complete transcriptome with 62,710 genes per cell line
+- **Integration**: Real transcriptome data loaded via `tahoe_100M_loader.py`
+- **Usage**: Automatic caching with efficient streaming for large-scale analysis
+- **Cache**: Data cached in `tahoe_cache/` directory for faster subsequent access
+
+### Integration Benefits
+- **Multi-scale analysis**: DNA variants → cellular responses
+- **Cell type specificity**: Predictions across 70+ cell lines
+- **Comprehensive risk scores**: Combined genomic + cellular impact assessment
+- **Workflow integration**: Seamless connection with existing TF prediction pipeline
+
+## Important Setup Notes
+
+### Configuration Files
+- **`config.env`**: Required for AlphaGenome API key (`ALPHAGENOME_API_KEY=your_key_here`)
+- **Git ignored**: Environment files are excluded from version control
+
+### Directory Structure
+- **`comprehensive_cache/`**: General analysis cache
+- **`tahoe_cache/`**: Tahoe-100M dataset cache
+- **`comprehensive_results/`**: Main pipeline output directory
+- **`main_pipeline.log`**: Detailed execution logs
+
+### Common Issues
+- **AlphaGenome Client**: Use `dna_client.create(api_key)` not `DnaClient()` constructor
+- **State Model**: Requires `arc-state` CLI tool in PATH
+- **Gene Validation**: Uses Ensembl REST API with fallback if network fails
+- **Memory Usage**: Large datasets cached efficiently using streaming
