@@ -17,6 +17,9 @@ tahoe_cache/
 *.log
 main_pipeline.log
 
+# State model directory (external git repo)
+state/
+
 # Python
 __pycache__/
 *.py[cod]
