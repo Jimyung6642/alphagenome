@@ -2,32 +2,43 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Common Development Commands
+## Core Development Principles
+- **Real data only**: NEVER use mock data, synthetic data, placeholder data, or hardcoded values in the pipeline. If errors occur, the pipeline should fail with proper error messages rather than fallback to fake data.
+- **End-to-end approach**: Use `main.py` as the primary entry point for comprehensive analysis. All parameters, file paths, and configurations should be managed through command-line arguments.
+- **Gene-agnostic design**: The pipeline works with ANY human gene symbol and should not be hardcoded for specific genes.
+
+## Quick Start Commands
+- **Run basic gene analysis**: `python3 main.py --gene TP53`
+- **Fast analysis mode**: `python3 main.py --gene TP53 --fast` (limits to 10 ontologies, 5 TFs per ontology)
+- **Interactive mode**: `python3 main.py --interactive`
+- **Batch analysis**: `python3 main.py --genes TP53,BRCA1,CLDN18`
+- **Web search**: Run `gemini` in bash for internet searches when needed
 
 ### Building and Testing
-- **Install package**: `pip install .` (or `pip install -e .` for development)
+- **Install package**: `pip3 install .` (or `pip3 install -e .` for development)
 - **Run tests**: `hatch test` (runs tests on default Python version)
 - **Run all tests**: `hatch test --all` (runs tests on all supported Python versions 3.10-3.13)
-- **Format code**: `hatch run check:format` (uses pyink formatter)
+- **Run single test file**: `hatch test src/alphagenome/models/dna_client_test.py`
+- **Format code**: `hatch run check:format` (uses pyink formatter with Google style)
 - **Lint code**: `hatch run check:lint` (uses pylint)
 - **Check all**: `hatch run check:all` (runs both format and lint)
 
 ### Development Environment
 - Uses hatch as build system and dependency manager
 - Tests use absltest framework (Google's testing library)
-- Code formatting follows Google Python style guide with pyink
+- Code formatting follows Google Python style guide with pyink (80 char line length)
 - Proto files are automatically compiled during build via `hatch_build.py`
+- Python 3.10-3.13 supported, with test matrix for all versions
 
 ## Code Architecture
 
 ### Core Structure
-The codebase consists of a comprehensive genomic analysis pipeline and the core AlphaGenome library:
+The codebase consists of a genomic analysis pipeline and the core AlphaGenome library:
 
 **Main Pipeline Components:**
-- `main.py`: Pipeline orchestrator and entry point
-- `standardized_genomic_analyzer.py`: Gene-agnostic analysis engine
-- `tahoe_100M_loader.py`: Real transcriptome data from 50 cancer cell lines
-- `state_model_client.py`: Clean State model integration components
+- `main.py`: Pipeline orchestrator and entry point with Tahoe-100M integration
+- `standardized_genomic_analyzer.py`: Gene-agnostic analysis engine with TF expression integration
+- `tahoe_100M_loader.py`: Comprehensive Tahoe-100M single-cell data loader (100M+ cells, 50 cancer cell lines)
 
 **Core AlphaGenome Library** (`src/alphagenome/`):
 
@@ -75,11 +86,6 @@ The codebase consists of a comprehensive genomic analysis pipeline and the core 
 - anndata for genomics data structures
 - Custom tensor utilities for efficient data handling
 
-### Extended Pipeline Dependencies
-- **datasets**: HuggingFace datasets library for Tahoe-100M access (`pip install datasets`)
-- **arc-state**: Arc Institute State model CLI (`uv tool install arc-state`)
-- **scanpy**: Single-cell analysis tools for transcriptome processing
-- **yaml**: Configuration file parsing for State model setup
 
 ### API Integration
 The client connects to Google DeepMind's AlphaGenome API service. Key supported sequence lengths are defined in `dna_client.py`: 2KB, 16KB, 100KB, 500KB, and 1MB.
@@ -95,32 +101,42 @@ The client connects to Google DeepMind's AlphaGenome API service. Key supported 
 - Analyzes DNA sequences up to 1 million base pairs
 - State-of-the-art performance on genomic prediction benchmarks
 
-### Comprehensive Genomic Analysis Pipeline (main.py)
-The main production pipeline combining AlphaGenome, State model, and Tahoe-100M for comprehensive genomic analysis:
+### AlphaGenome + Tahoe-100M Integration Pipeline (main.py)
+The main analysis pipeline integrating AlphaGenome TF predictions with Tahoe-100M single-cell expression data:
 
 **Basic Usage:**
-- Single gene analysis: `python3 main.py --gene TP53`
+- Single gene analysis with Tahoe-100M integration: `python3 main.py --gene TP53`
+- Fast mode (10 ontologies, 5 TFs per ontology): `python3 main.py --gene TP53 --fast`
+- Analysis with specific cell lines: `python3 main.py --gene TP53 --tahoe-cell-lines "HeLa,A549,MCF7"`
+- Analysis with expression threshold: `python3 main.py --gene TP53 --expression-threshold 0.5`
 - Interactive mode: `python3 main.py --interactive`
 - Batch analysis: `python3 main.py --genes TP53,BRCA1,CLDN18`
 
 **Key Features:**
 - **Gene-agnostic**: Works with ANY human gene symbol
-- **Comprehensive coverage**: Uses ALL 50 cancer cell lines from Tahoe-100M
+- **Tahoe-100M integration**: Real single-cell expression data from 100M+ cells across 50 cancer cell lines
+- **TF expression integration**: Combines AlphaGenome predictions with actual TF expression levels
 - **Real data only**: No synthetic or placeholder data
-- **All ontologies**: Analyzes across ALL available AlphaGenome ontologies
-- **Standardized output**: Consistent CSV format for all analyses
+- **All ontologies**: Analyzes across available AlphaGenome ontologies
+- **Standardized output**: Consistent CSV format with integrated expression data
+
+**New Command-Line Options:**
+- `--fast`: Enable fast mode with limits (10 ontologies, 5 TFs per ontology)
+- `--tahoe-cell-lines`: Specify target cell lines (e.g., "HeLa,A549,MCF7")
+- `--expression-threshold`: Set minimum TF expression threshold (default: 0.1)
+- `--tahoe-cache-dir`: Directory for Tahoe-100M data cache (default: tahoe_cache)
 
 **Architecture:**
 - `main.py`: Main entry point and pipeline orchestrator
-- `standardized_genomic_analyzer.py`: Core analysis engine
-- `tahoe_100M_loader.py`: Real transcriptome data loader (50 cancer cell lines)
-- `state_model_client.py`: Clean State model integration components
+- `standardized_genomic_analyzer.py`: Core analysis engine with Tahoe-100M integration
+- `tahoe_100M_loader.py`: Comprehensive Tahoe-100M data loader and processor
 
 **Output:**
-- Timestamped CSV files in `comprehensive_results/` directory
-- Combined AlphaGenome + State model predictions
-- Analysis statistics and metadata in JSON format
-- Comprehensive logging to `main_pipeline.log`
+- Timestamped CSV files with integrated AlphaGenome + Tahoe-100M results
+- Enhanced analysis statistics including expression metrics
+- TF expression data from target cell lines
+- Expression frequency and cell count data
+- Analysis metadata in JSON format
 
 ## Project Resources
 
@@ -141,45 +157,6 @@ The main production pipeline combining AlphaGenome, State model, and Tahoe-100M 
 - **General Questions**: Use community forum (faster response)
 - **Direct Contact**: alphagenome@google.com (may have delays due to volume)
 
-## Arc Institute State Model Integration
-
-### State Model Overview
-Arc Institute's State model for predicting cellular responses to perturbations, integrated with AlphaGenome genomic predictions through `state_model_client.py`.
-
-**Key Capabilities:**
-- Predict cellular responses to drugs, cytokines, and genetic perturbations
-- State Embedding (SE-600M): 705M parameter model for transcriptome embeddings
-- State Transition model: Bidirectional transformer for cellular response prediction
-- Integration with AlphaGenome for genomic variant → cellular response analysis
-
-### Pipeline Components
-- **`main.py`**: Main comprehensive analysis pipeline
-  - Usage: `python3 main.py --gene TP53` (single gene analysis)
-  - Usage: `python3 main.py --interactive` (interactive mode)
-  - Usage: `python3 main.py --genes TP53,BRCA1,CLDN18` (batch analysis)
-  
-- **`state_model_client.py`**: State model integration components
-  - Contains `StatePredictionClient` and `AlphaGenomeStateAnalyzer` classes
-  - Handles real transcriptome data loading from Tahoe-100M
-
-### Model Setup
-- SE-600M model downloaded from HuggingFace (`arcinstitute/SE-600M`)
-- Installed via `uv tool install arc-state`
-- Model path configurable in `StatePredictionClient` (default: `state/models/SE-600M/`)
-- **License**: Non-commercial use only (Arc Research Institute license)
-
-### Tahoe-100M Dataset Integration
-- **Dataset**: World's largest single-cell dataset (100M cells, 50 cancer cell lines)
-- **Coverage**: Complete transcriptome with 62,710 genes per cell line
-- **Integration**: Real transcriptome data loaded via `tahoe_100M_loader.py`
-- **Usage**: Automatic caching with efficient streaming for large-scale analysis
-- **Cache**: Data cached in `tahoe_cache/` directory for faster subsequent access
-
-### Integration Benefits
-- **Multi-scale analysis**: DNA variants → cellular responses
-- **Cell type specificity**: Predictions across 70+ cell lines
-- **Comprehensive risk scores**: Combined genomic + cellular impact assessment
-- **Workflow integration**: Seamless connection with existing TF prediction pipeline
 
 ## Important Setup Notes
 
@@ -189,23 +166,51 @@ Arc Institute's State model for predicting cellular responses to perturbations, 
 
 ### Directory Structure
 - **`comprehensive_cache/`**: General analysis cache
-- **`tahoe_cache/`**: Tahoe-100M dataset cache
-- **`comprehensive_results/`**: Main pipeline output directory
+- **`output/`**: Main pipeline output directory
 - **`main_pipeline.log`**: Detailed execution logs
 
 ### Common Issues
 - **AlphaGenome Client**: Use `dna_client.create(api_key)` not `DnaClient()` constructor
-- **State Model**: Requires `arc-state` CLI tool in PATH
 - **Gene Validation**: Uses Ensembl REST API with fallback if network fails
-- **Memory Usage**: Large datasets cached efficiently using streaming
+- **Tahoe-100M Data**: Expression data is distributed across 1,026 pseudobulk files, searches multiple files automatically
+- **Proto Compilation**: Protocol buffer files are auto-generated during build - don't edit `*_pb2.py` files directly
+- **Missing Dependencies**: If imports fail, ensure AlphaGenome package is installed with `pip3 install -e .`
+- **API Key Setup**: Ensure `config.env` exists in project root with valid `ALPHAGENOME_API_KEY`
 
 ## Core Pipeline Files
 
 The main pipeline consists of these essential components:
 - **`main.py`**: Main pipeline entry point - the primary script to use
 - **`standardized_genomic_analyzer.py`**: Core analysis engine used by main.py
-- **`tahoe_100M_loader.py`**: Real transcriptome data loader used by main.py
-- **`state_model_client.py`**: State model integration used by main.py
 - **`src/alphagenome/`**: Core AlphaGenome library modules
 
-**Usage**: Use `main.py` for all genomic analysis. It provides comprehensive analysis across all ontologies and cell lines.
+**Usage**: Use `main.py` for integrated genomic analysis combining AlphaGenome predictions with Tahoe-100M TF expression data.
+
+## Development Workflow
+
+### Making Changes
+1. **Install in development mode**: `pip3 install -e .` 
+2. **Run tests after changes**: `hatch test` or `hatch test --all`
+3. **Format and lint code**: `hatch run check:all` before committing
+4. **Test pipeline changes**: Use `python3 main.py --gene TP53 --fast` for quick validation
+
+### Testing Integration
+- **Pipeline validation**: `python3 test_tahoe_integration.py` (if available)
+- **Single gene test**: `python3 main.py --gene TP53 --fast --verbose`
+- **Check logs**: Review timestamped log files in `output/` directory
+
+## Current Pipeline Status
+
+### Completed Improvements
+- **Multi-file pseudobulk search**: Searches across 1,026 Tahoe-100M files instead of just one
+- **Intelligent file discovery**: Caches file locations (`_cell_line_file_mapping`) for faster subsequent searches
+- **Real metadata integration**: Uses 102 real cell lines from Tahoe-100M across 15 organ types
+- **Performance optimizations**: Reduced search scope and prioritized common files for efficiency
+- **Expression data conversion**: Converts pseudobulk summary data to simulated single-cell matrices
+
+### Pipeline Architecture Status
+- ✅ Real AlphaGenome API integration (no synthetic TF predictions)
+- ✅ Real Tahoe-100M metadata (102 cell lines, 15 organs)
+- ✅ Multi-file expression data loading with caching
+- ✅ TF identification without State model dependency
+- ✅ Comprehensive error handling and logging

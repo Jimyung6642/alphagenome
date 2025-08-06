@@ -11,7 +11,10 @@ comprehensive_output/
 # Cache directories
 comprehensive_cache/
 tahoe_cache/
+test_cache/
 *_cache/
+*.pkl
+*.cache
 
 # Log files
 *.log

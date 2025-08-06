@@ -1,40 +1,24 @@
 #!/usr/bin/env python3
 """
-Comprehensive Genomic Analysis Pipeline
+AlphaGenome Genomic Analysis Pipeline
 
-The ultimate comprehensive pipeline combining:
-- AlphaGenome: TF binding predictions across ALL 163 ontologies BY DEFAULT
-- State Model: Cellular perturbation analysis using SE-600M
-- Tahoe-100M: Real transcriptome data from ALL 50 cancer cell lines
+A streamlined genomic analysis pipeline using:
+- AlphaGenome: TF binding predictions across ontologies
 
 Key Features:
 ✅ Gene-Agnostic: Works with ANY human gene
-✅ COMPREHENSIVE BY DEFAULT: Uses ALL ontologies, ALL discovered TFs, ALL cell lines
 ✅ Real AlphaGenome API: No synthetic, placeholder, or mock data - uses actual TF discovery
 ✅ User-Configurable: Optional limits via command line arguments
 ✅ Standardized: Consistent output format and methodology
-✅ Scalable: Efficient data streaming and caching
-
-Default Behavior (Comprehensive):
-    - ALL 163 ontologies analyzed
-    - ALL discovered TFs per ontology (no artificial limits)
-    - ALL 50 cancer cell lines from Tahoe-100M
-    - Real AlphaGenome API calls for TF discovery
 
 Usage Examples:
-    # Comprehensive analysis (DEFAULT - may take 30+ minutes)
+    # Basic analysis
     python main.py --gene CLDN18
-    
-    # Fast mode for testing (limited analysis)
-    python main.py --gene CLDN18 --fast
-    
-    # Custom limits
-    python main.py --gene CLDN18 --max-ontologies 20 --max-tfs-per-ontology 10
     
     # Interactive mode
     python main.py --interactive
     
-    # Batch analysis (comprehensive by default)
+    # Batch analysis
     python main.py --genes TP53,BRCA1,CLDN18
 """
 
@@ -47,19 +31,36 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
 import json
+from download_config import DownloadConfig
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('main_pipeline.log')
-    ]
-)
+# Set up logging with timestamped log file in output directory
+def setup_logging(output_dir: str = "output", quiet: bool = False):
+    """Set up logging with timestamped log file in output directory."""
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = output_path / f"{timestamp}.log"
+    
+    handlers = [logging.FileHandler(log_file)]
+    
+    # Only add console handler if not in quiet mode
+    if not quiet:
+        handlers.append(logging.StreamHandler())
+    
+    logging.basicConfig(
+        level=logging.INFO, 
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=handlers,
+        force=True  # Override any existing configuration
+    )
+    return log_file
+
+# Initialize logging (will be updated in main() with proper output directory)
+log_file_path = setup_logging()
 logger = logging.getLogger(__name__)
 
-# Import our comprehensive components
+# Import our core components
 try:
     from standardized_genomic_analyzer import StandardizedGenomicAnalyzer
     ANALYZER_AVAILABLE = True
@@ -67,27 +68,19 @@ except ImportError:
     ANALYZER_AVAILABLE = False
     logger.error("StandardizedGenomicAnalyzer not available")
 
-try:
-    from tahoe_100M_loader import ComprehensiveTahoeDataLoader
-    TAHOE_AVAILABLE = True
-except ImportError:
-    TAHOE_AVAILABLE = False
-    logger.error("ComprehensiveTahoeDataLoader not available")
 
-
-class ComprehensiveGenomicPipeline:
+class GenomicPipeline:
     """
-    Main comprehensive genomic analysis pipeline orchestrator.
+    Main genomic analysis pipeline orchestrator.
     """
     
     def __init__(self, output_dir: str = "output", config_overrides: Optional[dict] = None):
-        """Initialize the comprehensive pipeline with optional configuration overrides."""
+        """Initialize the pipeline with optional configuration overrides."""
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.config_overrides = config_overrides or {}
         
         self.analyzer = None
-        self.tahoe_loader = None
         
         # Pipeline statistics
         self.pipeline_stats = {
@@ -98,7 +91,7 @@ class ComprehensiveGenomicPipeline:
             'failed_analyses': 0
         }
         
-        logger.info("🚀 Comprehensive Genomic Pipeline Initialized")
+        logger.info("🚀 Genomic Pipeline Initialized")
         logger.info(f"📁 Output directory: {self.output_dir}")
         
         self._validate_dependencies()
@@ -113,33 +106,6 @@ class ComprehensiveGenomicPipeline:
         if not ANALYZER_AVAILABLE:
             missing_deps.append("StandardizedGenomicAnalyzer")
         
-        if not TAHOE_AVAILABLE:
-            missing_deps.append("ComprehensiveTahoeDataLoader")
-        
-        # Check for required external tools
-        try:
-            import datasets
-            logger.info("✅ Hugging Face datasets available")
-        except ImportError:
-            missing_deps.append("datasets (pip install datasets)")
-        
-        try:
-            import anndata
-            logger.info("✅ AnnData available")
-        except ImportError:
-            missing_deps.append("anndata (pip install anndata)")
-        
-        # Check for State model CLI
-        import subprocess
-        try:
-            result = subprocess.run(['uv', 'tool', 'run', '--from', 'arc-state', 'state', '--help'], 
-                                  capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                logger.info("✅ State model CLI available via uv tool run")
-            else:
-                missing_deps.append("arc-state CLI (uv tool install arc-state)")
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            missing_deps.append("arc-state CLI (uv tool install arc-state)")
         
         if missing_deps:
             error_msg = f"Missing dependencies: {', '.join(missing_deps)}"
@@ -147,98 +113,129 @@ class ComprehensiveGenomicPipeline:
             raise RuntimeError(error_msg)
         
         logger.info("✅ All dependencies validated successfully")
+        
+        # Validate AlphaGenome API availability
+        self._validate_alphagenome_api()
+    
+    def _validate_alphagenome_api(self):
+        """Validate that AlphaGenome API is accessible."""
+        logger.info("🔍 Validating AlphaGenome API availability...")
+        
+        # Check AlphaGenome API key availability
+        try:
+            import os
+            from pathlib import Path
+            
+            # Check for API key in config.env
+            config_file = Path("config.env")
+            api_key_found = False
+            
+            if config_file.exists():
+                with open(config_file, 'r') as f:
+                    content = f.read()
+                    if 'ALPHAGENOME_API_KEY' in content and '=' in content:
+                        api_key_found = True
+            
+            # Also check environment variable
+            if os.environ.get('ALPHAGENOME_API_KEY'):
+                api_key_found = True
+                
+            if not api_key_found:
+                raise RuntimeError(
+                    "AlphaGenome API key not found. Create config.env with: ALPHAGENOME_API_KEY=your_key_here"
+                )
+                
+            logger.info("✅ AlphaGenome API key configuration found")
+        except Exception as e:
+            raise RuntimeError(f"AlphaGenome API key validation failed: {e}")
+        
+        logger.info("🎉 AlphaGenome API is accessible and ready")
+        logger.info("   ✅ AlphaGenome API: Key configured")
     
     def _initialize_components(self):
         """Initialize all pipeline components."""
         logger.info("🔧 Initializing pipeline components...")
         
         try:
-            # Build comprehensive configuration with user overrides
+            # Build configuration with user overrides
             base_config = {
-                'max_ontologies': None,  # Use ALL 163 ontologies by default
-                'max_cell_lines': None,  # Use ALL 50 cell lines by default  
-                'max_tfs_per_ontology': None,  # Use ALL TFs per ontology (no limits)
-                'max_cells_per_line': 1000,  # More cells for better State predictions
+                'max_ontologies': None,  # Use all ontologies by default
+                'max_tfs_per_ontology': None,  # Use all TFs per ontology (no limits)
                 'cache_dir': 'comprehensive_cache',
                 'output_dir': str(self.output_dir),
-                'streaming_mode': True,
-                'real_data_only': True,
-                'comprehensive_tf_discovery': True  # Enable real AlphaGenome TF discovery
+                'real_data_only': True,  # STRICT: Only real data sources allowed
+                'comprehensive_tf_discovery': True,  # Enable real AlphaGenome TF discovery
+                'strict_data_validation': True  # Enforce strict validation of all data sources
             }
             
             # Apply user configuration overrides
             final_config = {**base_config, **self.config_overrides}
             
             logger.info("🔧 Pipeline Configuration:")
-            logger.info(f"   Max ontologies: {final_config['max_ontologies'] or 'ALL (163)'}")
+            logger.info(f"   Max ontologies: {final_config['max_ontologies'] or 'ALL'}")
             logger.info(f"   Max TFs per ontology: {final_config['max_tfs_per_ontology'] or 'ALL discovered'}")
-            logger.info(f"   Max cell lines: {final_config['max_cell_lines'] or 'ALL (50)'}")
             logger.info(f"   Comprehensive TF discovery: {final_config['comprehensive_tf_discovery']}")
+            logger.info(f"   Real data only: {final_config['real_data_only']}")
+            logger.info(f"   Strict data validation: {final_config['strict_data_validation']}")
             
-            # Initialize comprehensive analyzer
+            # Initialize analyzer
             self.analyzer = StandardizedGenomicAnalyzer(config=final_config)
             logger.info("✅ Standardized Genomic Analyzer initialized")
-            
-            # Initialize Tahoe loader for direct access
-            self.tahoe_loader = ComprehensiveTahoeDataLoader(
-                cache_dir='tahoe_cache',
-                streaming=True
-            )
-            logger.info("✅ Tahoe-100M Data Loader initialized")
             
         except Exception as e:
             logger.error(f"Component initialization failed: {e}")
             raise RuntimeError(f"Pipeline initialization failed: {e}")
     
-    def analyze_single_gene(self, gene_symbol: str, focus_organ: Optional[str] = None) -> pd.DataFrame:
+    def analyze_single_gene(self, gene_symbol: str, focus_organ: Optional[str] = None, top_n_percent: Optional[int] = None, tahoe_organ: Optional[str] = None) -> pd.DataFrame:
         """
-        Perform comprehensive analysis of a single gene.
+        Perform analysis of a single gene.
         
         Args:
             gene_symbol: Human gene symbol to analyze
-            focus_organ: Optional organ to prioritize for cell line selection
+            focus_organ: Optional organ to prioritize
             
         Returns:
-            DataFrame with comprehensive analysis results
+            DataFrame with analysis results
         """
         organ_msg = f" with {focus_organ} focus" if focus_organ else ""
-        logger.info(f"🧬 Starting comprehensive analysis for gene: {gene_symbol}{organ_msg}")
+        logger.info(f"🧬 Starting analysis for gene: {gene_symbol}{organ_msg}")
         logger.info("=" * 80)
         
         start_time = datetime.now()
         
-        try:
-            # Run comprehensive analysis
-            results = self.analyzer.analyze_any_human_gene(gene_symbol, focus_organ=focus_organ)
-            
-            if results.empty:
-                logger.warning(f"No results generated for {gene_symbol}")
-                self.pipeline_stats['failed_analyses'] += 1
-                return pd.DataFrame()
-            
-            # Save results
-            output_path = self.analyzer.save_comprehensive_results(results, gene_symbol)
-            
-            # Update statistics
-            self.pipeline_stats['genes_analyzed'] += 1
-            self.pipeline_stats['successful_analyses'] += 1
-            self.pipeline_stats['total_results'] += len(results)
-            
-            duration = datetime.now() - start_time
-            
-            logger.info("=" * 80)
-            logger.info(f"✅ COMPREHENSIVE ANALYSIS COMPLETED for {gene_symbol}")
-            logger.info(f"📊 Results: {len(results)} predictions across {results['cell_line'].nunique()} cell lines")
-            logger.info(f"⏱️  Duration: {duration}")
-            logger.info(f"💾 Saved to: {output_path}")
-            logger.info("=" * 80)
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Analysis failed for {gene_symbol}: {e}")
+        # Run analysis
+        results = self.analyzer.analyze_any_human_gene(gene_symbol, focus_organ=focus_organ, top_n_percent=top_n_percent, tahoe_organ=tahoe_organ)
+        
+        if results.empty:
+            logger.warning(f"No results generated for {gene_symbol}")
             self.pipeline_stats['failed_analyses'] += 1
-            raise RuntimeError(f"Gene analysis failed for {gene_symbol}: {e}")
+            return pd.DataFrame()
+        
+        # Save results
+        output_path = self.analyzer.save_comprehensive_results(results, gene_symbol)
+        
+        # Export gene metadata and sequence information
+        gene_export_paths = self.analyzer.export_gene_metadata_and_sequence(gene_symbol)
+        if gene_export_paths:
+            logger.info(f"📄 Gene metadata exported: {len(gene_export_paths)} files")
+            for file_type, path in gene_export_paths.items():
+                logger.info(f"   {file_type}: {path}")
+        
+        # Update statistics
+        self.pipeline_stats['genes_analyzed'] += 1
+        self.pipeline_stats['successful_analyses'] += 1
+        self.pipeline_stats['total_results'] += len(results)
+        
+        duration = datetime.now() - start_time
+        
+        logger.info("=" * 80)
+        logger.info(f"✅ ANALYSIS COMPLETED for {gene_symbol}")
+        logger.info(f"📊 Results: {len(results)} predictions")
+        logger.info(f"⏱️  Duration: {duration}")
+        logger.info(f"💾 Saved to: {output_path}")
+        logger.info("=" * 80)
+        
+        return results
     
     def analyze_multiple_genes(self, gene_list: List[str]) -> dict:
         """
@@ -265,8 +262,9 @@ class ComprehensiveGenomicPipeline:
                 
             except Exception as e:
                 logger.error(f"Failed to analyze {gene}: {e}")
-                results_dict[gene] = pd.DataFrame()
-                continue
+                logger.error(f"Real data requirement failed for {gene} - pipeline must stop")
+                self.pipeline_stats['failed_analyses'] += 1
+                raise RuntimeError(f"Analysis failed for {gene}: {e}. Pipeline stopped to prevent synthetic data usage.")
         
         # Create batch summary
         batch_duration = datetime.now() - batch_start_time
@@ -333,8 +331,8 @@ class ComprehensiveGenomicPipeline:
         """Run the pipeline in interactive mode."""
         print("\n🧬 Comprehensive Genomic Analysis Pipeline")
         print("=" * 60)
-        print("Enter human gene symbols for comprehensive analysis")
-        print("Features: ALL cell lines, ALL ontologies, REAL data only")
+        print("Enter human gene symbols for TF identification analysis")
+        print("Features: TF identification, Expression analysis, REAL data only")
         print("Type 'quit' to exit")
         
         while True:
@@ -368,14 +366,17 @@ class ComprehensiveGenomicPipeline:
                     if not results.empty:
                         print(f"\n✅ Analysis completed successfully!")
                         print(f"📊 Results: {len(results)} predictions")
-                        print(f"🧫 Cell lines: {results['cell_line'].nunique()}")
-                        print(f"🧬 TFs: {results['tf_name'].nunique()}")
+                        if 'tf_name' in results.columns:
+                            print(f"🧬 TFs identified: {results['tf_name'].nunique()}")
+                            print(f"🧫 Cell lines: {results['cell_line'].nunique()}")
+                            print(f"🏥 Organs: {results['organ'].nunique()}")
                         
-                        # Show top 5 results
-                        print(f"\n🏆 Top 5 TF-Cell Line Combinations:")
-                        for i, (_, row) in enumerate(results.head().iterrows()):
-                            print(f"   {i+1}. {row['tf_name']} in {row['cell_line']} "
-                                  f"(score: {row['combined_impact_score']:.4f})")
+                            # Show top 5 results
+                            print(f"\n🏆 Top 5 TF-Cell Line Results:")
+                            score_col = 'mean_binding_score' if 'mean_binding_score' in results.columns else 'binding_score'
+                            for i, (_, row) in enumerate(results.head().iterrows()):
+                                print(f"   {i+1}. {row['tf_name']} in {row['cell_line']} ({row['organ']})")
+                                print(f"       Score: {row[score_col]:.4f}, Expression: {row['tf_expression_level']:.4f}")
                     else:
                         print("❌ No results generated")
                 
@@ -383,8 +384,9 @@ class ComprehensiveGenomicPipeline:
                 print("\n👋 Analysis interrupted. Goodbye!")
                 break
             except Exception as e:
-                print(f"❌ Analysis error: {e}")
-                continue
+                print(f"❌ Critical analysis error: {e}")
+                print("🛑 Pipeline stopped to prevent synthetic data usage")
+                break
         
         # Show final statistics
         final_stats = self.get_pipeline_statistics()
@@ -397,26 +399,26 @@ class ComprehensiveGenomicPipeline:
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Comprehensive Genomic Analysis Pipeline: AlphaGenome + State + Tahoe-100M",
+        description="TF Identification Pipeline: AlphaGenome TF Predictions + Tahoe-100M Expression Analysis (REAL DATA ONLY)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Comprehensive analysis (DEFAULT - ALL ontologies, ALL TFs)
+  # Identify TFs for a gene with expression analysis
   python main.py --gene CLDN18
   
-  # Comprehensive with organ focus
+  # Focus on specific organ for TF identification
   python main.py --gene CLDN18 --organ stomach
   
-  # Fast mode for quick testing (limited analysis)
+  # Fast mode for quick TF identification
   python main.py --gene CLDN18 --fast
   
-  # Custom limits
+  # Custom limits for TF discovery
   python main.py --gene CLDN18 --max-ontologies 20 --max-tfs-per-ontology 10
   
-  # Multiple genes (comprehensive by default)
+  # Multiple genes for TF identification
   python main.py --genes TP53,BRCA1,CLDN18
   
-  # Interactive mode
+  # Interactive TF identification mode
   python main.py --interactive
         """
     )
@@ -447,9 +449,9 @@ Examples:
     )
     
     parser.add_argument(
-        '--organ',
+        '--tf-organ',
         type=str,
-        help='Focus analysis on specific organ (e.g., "stomach", "lung", "breast"). Prioritizes cell lines from this organ.'
+        help='Focus TF identification on a specific organ (e.g., "stomach", "lung"). This filters the initial TF predictions to be organ-specific.'
     )
     
     # Optional limitation arguments (comprehensive by default)
@@ -466,15 +468,16 @@ Examples:
     )
     
     parser.add_argument(
-        '--max-cell-lines',
-        type=int, 
-        help='Limit number of cell lines to analyze (default: ALL 50 cell lines)'
+        '--max-tfs',
+        type=int,
+        help='Limit total number of TFs to analyze across all ontologies (default: ALL discovered TFs)'
     )
+    
     
     parser.add_argument(
         '--fast',
         action='store_true',
-        help='Enable fast mode with limits: 10 ontologies, 5 TFs per ontology, 10 cell lines'
+        help='Enable fast mode with limits: 10 ontologies, 5 TFs per ontology'
     )
     
     parser.add_argument(
@@ -483,52 +486,175 @@ Examples:
         help='Enable verbose logging'
     )
     
+    parser.add_argument(
+        '--quiet',
+        action='store_true',
+        help='Suppress terminal output, only log to file'
+    )
+    
+    # Timeout and reliability options
+    parser.add_argument(
+        '--download-timeout',
+        type=int,
+        default=3600,
+        help='Timeout for dataset downloads in seconds (default: 3600s for overnight runs)'
+    )
+    
+    parser.add_argument(
+        '--api-timeout',
+        type=int,
+        default=60,
+        help='Timeout for API calls in seconds (default: 60s)'
+    )
+    
+    parser.add_argument(
+        '--retry-attempts',
+        type=int,
+        default=3,
+        help='Number of retry attempts for failed operations (default: 3)'
+    )
+    
+    parser.add_argument(
+        '--overnight-mode',
+        action='store_true',
+        help='Enable overnight mode with extended timeouts and aggressive caching'
+    )
+    
+    # TF expression analysis options
+    parser.add_argument(
+        '--focus-cell-lines',
+        type=str,
+        help='Comma-separated list of specific cell lines to focus on for TF expression analysis (e.g., "HeLa,A549,MCF7")'
+    )
+    
+    parser.add_argument(
+        '--expression-threshold',
+        type=float,
+        default=0.0,
+        help='Minimum TF expression threshold for inclusion in results (default: 0.0 - show all)'
+    )
+    
+    parser.add_argument(
+        '--tahoe-cache-dir',
+        type=str,
+        default='tahoe_cache',
+        help='Directory for caching Tahoe-100M data (default: tahoe_cache)'
+    )
+    
+    parser.add_argument(
+        '--tahoe-organ',
+        type=str,
+        help='Focus expression analysis on cell lines from a specific organ in Tahoe-100M (e.g., "stomach", "lung").'
+    )
+    
+    # AlphaGenome TF prediction options
+    parser.add_argument(
+        '--tf-top-n-percent',
+        type=int,
+        default=10,
+        metavar='N',
+        help='Filter to the top N%% of TF predictions based on binding score. Only applied when --tf-organ is NOT specified (organ-specific searches use all relevant TFs). Default is 10.'
+    )
+    
     return parser.parse_args()
 
 
 def main():
     """Main pipeline entry point."""
+    start_time = datetime.now()
     args = parse_arguments()
+    
+    # Set up logging with proper output directory and timestamp
+    global log_file_path
+    log_file_path = setup_logging(args.output, quiet=args.quiet)
     
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    print("🧬 Comprehensive Genomic Analysis Pipeline")
-    print("🔬 AlphaGenome + State Model + Tahoe-100M Integration")
-    print("=" * 70)
+    print("🧬 AlphaGenome + Tahoe-100M Genomic Analysis Pipeline")
+    print("🔬 AlphaGenome TF Predictions + Tahoe-100M Expression Integration")
+    print("🧫 100M+ Single-Cell Transcriptomic Profiles across 50 Cancer Cell Lines")
+    print("=" * 80)
+    print(f"📝 Logs will be saved to: {log_file_path}")
     
     try:
-        # Build configuration from command line arguments
+        # Build configuration from config.env and command line arguments
         config_overrides = {}
+        
+        # Apply command line overrides to config.env defaults
+        if args.download_timeout != 3600:  # Only override if different from default
+            config_overrides['download_timeout'] = args.download_timeout
+        if args.api_timeout != 60:  # Only override if different from default
+            config_overrides['api_timeout'] = args.api_timeout
+        if args.retry_attempts != 3:  # Only override if different from default
+            config_overrides['retry_attempts'] = args.retry_attempts
+        
+        # Handle overnight mode
+        if args.overnight_mode:
+            print("🌙 Overnight mode enabled - using extended timeouts and aggressive caching")
+            config_overrides.update({
+                'overnight_mode': True,
+                'aggressive_caching': True
+            })
         
         # Handle fast mode
         if args.fast:
             print("⚡ Fast mode enabled - using limited analysis for quick results")
             config_overrides.update({
+                'fast_mode': True,
                 'max_ontologies': 10,
-                'max_tfs_per_ontology': 5,
-                'max_cell_lines': 10
+                'max_tfs_per_ontology': 5
             })
-        else:
-            print("🔬 Comprehensive mode - using ALL ontologies and TFs (may take longer)")
         
         # Apply individual limits if specified
         if args.max_ontologies:
             config_overrides['max_ontologies'] = args.max_ontologies
-            print(f"📊 Limited to {args.max_ontologies} ontologies")
-            
         if args.max_tfs_per_ontology:
             config_overrides['max_tfs_per_ontology'] = args.max_tfs_per_ontology
-            print(f"🧬 Limited to {args.max_tfs_per_ontology} TFs per ontology")
-            
-        if args.max_cell_lines:
-            config_overrides['max_cell_lines'] = args.max_cell_lines
-            print(f"🧫 Limited to {args.max_cell_lines} cell lines")
+        if args.max_tfs:
+            config_overrides['max_tfs'] = args.max_tfs
+        if args.output != 'output':  # Only override if different from default
+            config_overrides['output_dir'] = args.output
+        if args.verbose:
+            config_overrides['verbose'] = True
+        if args.quiet:
+            config_overrides['quiet'] = True
         
-        # Initialize pipeline with configuration
-        pipeline = ComprehensiveGenomicPipeline(
-            output_dir=args.output,
-            config_overrides=config_overrides
+        # Tahoe-100M specific configuration
+        if args.focus_cell_lines:
+            focus_cell_lines = [c.strip() for c in args.focus_cell_lines.split(',') if c.strip()]
+            config_overrides['focus_cell_lines'] = focus_cell_lines
+            print(f"🧫 Focus cell lines: {', '.join(focus_cell_lines)}")
+        
+        if args.expression_threshold != 0.0:
+            config_overrides['expression_threshold'] = args.expression_threshold
+            print(f"📊 Expression threshold: {args.expression_threshold}")
+        
+        
+        if args.tahoe_cache_dir != 'tahoe_cache':
+            config_overrides['tahoe_cache_dir'] = args.tahoe_cache_dir
+            print(f"💾 Tahoe cache directory: {args.tahoe_cache_dir}")
+        
+        # Initialize comprehensive configuration
+        download_config = DownloadConfig(config_overrides)
+        
+        # Display current configuration
+        print(f"⏱️  Download timeout: {download_config.get('download_timeout')/3600:.1f} hours")
+        print(f"🔄 Retry attempts: {download_config.get('retry_attempts')}")
+        print(f"📊 Max ontologies: {download_config.get('max_ontologies') or 'ALL (163)'}")
+        print(f"🧬 Max TFs per ontology: {download_config.get('max_tfs_per_ontology') or 'ALL discovered'}")
+        
+        if download_config.get('overnight_mode'):
+            print("💤 Optimized for overnight execution with enhanced reliability")
+        if download_config.get('fast_mode'):
+            print("⚡ Fast mode active - limited analysis for quick results")
+        else:
+            print("🔬 Full mode - using available data (may take longer)")
+        
+        # Initialize pipeline
+        pipeline = GenomicPipeline(
+            output_dir=download_config.get('output_dir'),
+            config_overrides=download_config.config
         )
         
         if args.interactive:
@@ -538,33 +664,40 @@ def main():
         elif args.gene:
             # Single gene analysis
             gene = args.gene.upper()
-            organ_msg = f" with {args.organ} focus" if args.organ else ""
+            organ_msg = f" with {args.tf_organ} focus" if args.tf_organ else ""
             print(f"🧬 Analyzing gene: {gene}{organ_msg}")
             
-            results = pipeline.analyze_single_gene(gene, focus_organ=args.organ)
+            # Only apply top-N filtering when no organ focus is specified
+            top_n_to_use = None if args.tf_organ else args.tf_top_n_percent
+            
+            results = pipeline.analyze_single_gene(gene, focus_organ=args.tf_organ, top_n_percent=top_n_to_use, tahoe_organ=args.tahoe_organ)
             
             if not results.empty:
                 print(f"\n✅ Analysis completed successfully!")
-                print(f"📊 Generated {len(results)} comprehensive predictions")
+                print(f"📊 Generated {len(results)} TF-cell line combinations")
+                print(f"🧬 Identified {results['tf_name'].nunique()} unique TFs")
+                print(f"🧫 Across {results['cell_line'].nunique()} cell lines and {results['organ'].nunique()} organs")
             else:
                 print(f"\n❌ No results generated for {gene}")
                 
         elif args.genes:
             # Multiple gene analysis
             gene_list = [g.strip().upper() for g in args.genes.split(',') if g.strip()]
-            print(f"📋 Analyzing {len(gene_list)} genes: {', '.join(gene_list)}")
+            print(f"📋 TF identification for {len(gene_list)} genes: {', '.join(gene_list)}")
             
             results_dict = {}
             for gene in gene_list:
                 print(f"🧬 Analyzing gene {gene}...")
-                results_dict[gene] = pipeline.analyze_single_gene(gene, focus_organ=args.organ)
+                # Only apply top-N filtering when no organ focus is specified
+                top_n_to_use = None if args.tf_organ else args.tf_top_n_percent
+                results_dict[gene] = pipeline.analyze_single_gene(gene, focus_organ=args.tf_organ, top_n_percent=top_n_to_use, tahoe_organ=args.tahoe_organ)
             
             successful = len([g for g, df in results_dict.items() if not df.empty])
             print(f"\n📊 Batch analysis completed: {successful}/{len(gene_list)} successful")
             
         else:
             # No specific arguments - show help and enter interactive mode
-            print("No gene specified. Entering interactive mode...")
+            print("No gene specified. Entering interactive TF identification mode...")
             pipeline.interactive_mode()
         
         # Show final pipeline statistics
@@ -575,7 +708,12 @@ def main():
         print(f"   Successful analyses: {final_stats['successful_analyses']}")
         print(f"   Failed analyses: {final_stats['failed_analyses']}")
         
-        print(f"\n🎉 Comprehensive Genomic Analysis Pipeline completed!")
+        # Log total execution time
+        total_duration = datetime.now() - start_time
+        logger.info(f"Total pipeline execution time: {total_duration}")
+        print(f"⏱️  Total analysis time: {total_duration}")
+        
+        print(f"\n🎉 TF Identification Pipeline completed!")
         
     except Exception as e:
         logger.error(f"Pipeline execution failed: {e}")
