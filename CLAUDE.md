@@ -12,6 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Fast analysis mode**: `python3 main.py --gene TP53 --fast` (limits to 10 ontologies, 5 TFs per ontology)
 - **Interactive mode**: `python3 main.py --interactive`
 - **Batch analysis**: `python3 main.py --genes TP53,BRCA1,CLDN18`
+- **Verbose output**: `python3 main.py --gene TP53 --verbose` (enables console logging)
 - **Web search**: Run `gemini` in bash for internet searches when needed
 
 ### Building and Testing
@@ -120,8 +121,9 @@ The main analysis pipeline integrating AlphaGenome TF predictions with Tahoe-100
 - **All ontologies**: Analyzes across available AlphaGenome ontologies
 - **Standardized output**: Consistent CSV format with integrated expression data
 
-**New Command-Line Options:**
+**Command-Line Options:**
 - `--fast`: Enable fast mode with limits (10 ontologies, 5 TFs per ontology)
+- `--verbose`: Enable console logging output
 - `--tahoe-cell-lines`: Specify target cell lines (e.g., "HeLa,A549,MCF7")
 - `--expression-threshold`: Set minimum TF expression threshold (default: 0.1)
 - `--tahoe-cache-dir`: Directory for Tahoe-100M data cache (default: tahoe_cache)
@@ -166,8 +168,9 @@ The main analysis pipeline integrating AlphaGenome TF predictions with Tahoe-100
 
 ### Directory Structure
 - **`comprehensive_cache/`**: General analysis cache
-- **`output/`**: Main pipeline output directory
-- **`main_pipeline.log`**: Detailed execution logs
+- **`output/`**: Main pipeline output directory with timestamped logs and results
+- **`tahoe_cache/`**: Tahoe-100M data cache directory (configurable via --tahoe-cache-dir)
+- **`config.env`**: Environment configuration file (git ignored)
 
 ### Common Issues
 - **AlphaGenome Client**: Use `dna_client.create(api_key)` not `DnaClient()` constructor
