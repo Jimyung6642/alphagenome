@@ -8,11 +8,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Gene-agnostic design**: The pipeline works with ANY human gene symbol and should not be hardcoded for specific genes.
 
 ## Quick Start Commands
-- **Run basic gene analysis**: `python3 main.py --gene TP53`
-- **Fast analysis mode**: `python3 main.py --gene TP53 --fast` (limits to 10 ontologies, 5 TFs per ontology)
-- **Interactive mode**: `python3 main.py --interactive`
-- **Batch analysis**: `python3 main.py --genes TP53,BRCA1,CLDN18`
-- **Verbose output**: `python3 main.py --gene TP53 --verbose` (enables console logging)
+
+### Perturbation Analysis Pipeline (main.py)
+- **Basic perturbation analysis**: `python3 main.py --genes TP53 --organ stomach`
+- **Multiple genes with organ focus**: `python3 main.py --genes TP53,BRCA1,CLDN18 --organ lung`
+- **Custom perturbation parameters**: `python3 main.py --genes CLDN18 --perturbation-strength 0.8 --deg-p-threshold 0.01`
+- **Verbose output**: `python3 main.py --genes TP53 --verbose` (enables console logging)
+- **TF organ filtering**: `python3 main.py --genes TP53 --tf-organ stomach --organ lung`
+
+### Other Commands
 - **Web search**: Run `gemini` in bash for internet searches when needed
 
 ### Building and Testing
@@ -37,9 +41,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The codebase consists of a genomic analysis pipeline and the core AlphaGenome library:
 
 **Main Pipeline Components:**
-- `main.py`: Pipeline orchestrator and entry point with Tahoe-100M integration
+- `main.py`: Comprehensive perturbation analysis pipeline integrating AlphaGenome + Tahoe-100M + ST-Tahoe State Model + DEG Analysis
 - `standardized_genomic_analyzer.py`: Gene-agnostic analysis engine with TF expression integration
 - `tahoe_100M_loader.py`: Comprehensive Tahoe-100M single-cell data loader (100M+ cells, 50 cancer cell lines)
+- `state_perturbation_engine.py`: ST-Tahoe State model wrapper for zero-shot TF perturbation predictions
+- `tahoe_state_bridge.py`: Data format converter from Tahoe-100M to State model H5AD format
+- `deg_analyzer.py`: Differential expression analysis for target genes and genome-wide DEGs
 
 **Core AlphaGenome Library** (`src/alphagenome/`):
 
@@ -102,43 +109,51 @@ The client connects to Google DeepMind's AlphaGenome API service. Key supported 
 - Analyzes DNA sequences up to 1 million base pairs
 - State-of-the-art performance on genomic prediction benchmarks
 
-### AlphaGenome + Tahoe-100M Integration Pipeline (main.py)
-The main analysis pipeline integrating AlphaGenome TF predictions with Tahoe-100M single-cell expression data:
+### Comprehensive Perturbation Analysis Pipeline (main.py)
+The main analysis pipeline integrating AlphaGenome, Tahoe-100M, ST-Tahoe State Model, and DEG analysis for comprehensive genomic perturbation studies:
 
 **Basic Usage:**
-- Single gene analysis with Tahoe-100M integration: `python3 main.py --gene TP53`
-- Fast mode (10 ontologies, 5 TFs per ontology): `python3 main.py --gene TP53 --fast`
-- Analysis with specific cell lines: `python3 main.py --gene TP53 --tahoe-cell-lines "HeLa,A549,MCF7"`
-- Analysis with expression threshold: `python3 main.py --gene TP53 --expression-threshold 0.5`
-- Interactive mode: `python3 main.py --interactive`
-- Batch analysis: `python3 main.py --genes TP53,BRCA1,CLDN18`
+- Single gene analysis: `python3 main.py --genes TP53 --organ stomach`
+- Multiple genes with organ focus: `python3 main.py --genes TP53,BRCA1,CLDN18 --organ lung`
+- Custom perturbation parameters: `python3 main.py --genes CLDN18 --perturbation-strength 0.8`
+- TF organ filtering: `python3 main.py --genes TP53 --tf-organ stomach`
+- Verbose output: `python3 main.py --genes TP53 --verbose`
 
 **Key Features:**
+- **Comprehensive perturbation analysis**: Integrates AlphaGenome TF predictions, Tahoe-100M expression data, ST-Tahoe zero-shot perturbations, and DEG analysis
 - **Gene-agnostic**: Works with ANY human gene symbol
-- **Tahoe-100M integration**: Real single-cell expression data from 100M+ cells across 50 cancer cell lines
-- **TF expression integration**: Combines AlphaGenome predictions with actual TF expression levels
-- **Real data only**: No synthetic or placeholder data
-- **All ontologies**: Analyzes across available AlphaGenome ontologies
-- **Standardized output**: Consistent CSV format with integrated expression data
+- **Real data only**: No synthetic or placeholder data throughout the pipeline
+- **Multi-modal integration**: Combines transcription factor predictions, baseline expression, perturbation effects, and differential expression
+- **Organ-specific analysis**: Focused analysis on specific organs and cell lines
+- **Zero-shot TF perturbation**: ST-Tahoe State model for cellular perturbation effect predictions without training
+- **Standardized output**: Comprehensive CSV and JSON outputs with integrated results
 
 **Command-Line Options:**
-- `--fast`: Enable fast mode with limits (10 ontologies, 5 TFs per ontology)
+- `--genes`: Target gene(s) for analysis (comma-separated list, e.g., "TP53,BRCA1")
+- `--organ`: Focus analysis on specific organ (e.g., stomach, lung)
+- `--tf-organ`: Filter AlphaGenome TF predictions to specific organ context
+- `--perturbation-strength`: Perturbation strength for ST-Tahoe model (default: 0.5)
+- `--deg-p-threshold`: P-value threshold for DEG analysis (default: 0.05)
+- `--deg-fc-threshold`: Log2 fold-change threshold for DEG analysis (default: 0.5)
+- `--tf-percent`: Filter to top N% of TF predictions (default: 10)
 - `--verbose`: Enable console logging output
-- `--tahoe-cell-lines`: Specify target cell lines (e.g., "HeLa,A549,MCF7")
-- `--expression-threshold`: Set minimum TF expression threshold (default: 0.1)
-- `--tahoe-cache-dir`: Directory for Tahoe-100M data cache (default: tahoe_cache)
+- `--tahoe-cache-dir`: Directory for Tahoe-100M H5AD cache (default: output/bridge_cache)
 
 **Architecture:**
-- `main.py`: Main entry point and pipeline orchestrator
-- `standardized_genomic_analyzer.py`: Core analysis engine with Tahoe-100M integration
-- `tahoe_100M_loader.py`: Comprehensive Tahoe-100M data loader and processor
+- `main.py`: Main entry point and comprehensive perturbation analysis orchestrator
+- `standardized_genomic_analyzer.py`: Core analysis engine with TF expression integration
+- `tahoe_100M_loader.py`: Tahoe-100M data loader and processor (100M+ cells)
+- `state_perturbation_engine.py`: ST-Tahoe State model wrapper for zero-shot TF perturbation predictions
+- `tahoe_state_bridge.py`: Data format converter for Tahoe-100M to State model compatibility
+- `deg_analyzer.py`: Differential expression analysis engine
 
 **Output:**
-- Timestamped CSV files with integrated AlphaGenome + Tahoe-100M results
-- Enhanced analysis statistics including expression metrics
-- TF expression data from target cell lines
-- Expression frequency and cell count data
-- Analysis metadata in JSON format
+- Timestamped CSV files with comprehensive perturbation analysis results
+- AlphaGenome TF predictions integrated with Tahoe-100M expression data
+- ST-Tahoe zero-shot perturbation effect predictions
+- Differential expression analysis results (target genes and genome-wide DEGs)
+- Statistical significance testing and p-value corrections
+- Analysis metadata and parameters in JSON format
 
 ## Project Resources
 
@@ -215,5 +230,7 @@ The main pipeline consists of these essential components:
 - ✅ Real AlphaGenome API integration (no synthetic TF predictions)
 - ✅ Real Tahoe-100M metadata (102 cell lines, 15 organs)
 - ✅ Multi-file expression data loading with caching
-- ✅ TF identification without State model dependency
-- ✅ Comprehensive error handling and logging
+- ✅ State model integration for perturbation predictions
+- ✅ Differential expression analysis (DEG) for target genes and genome-wide effects
+- ✅ Data format bridging between Tahoe-100M and State model
+- ✅ Comprehensive error handling and logging throughout pipeline

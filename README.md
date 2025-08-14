@@ -1,235 +1,302 @@
-![AlphaGenome header image](docs/source/_static/header.png)
+# AlphaGenome + Tahoe-100M + State Model Perturbation Analysis Pipeline
 
-# AlphaGenome
+A comprehensive genomic perturbation analysis pipeline that integrates multiple state-of-the-art models for transcription factor (TF) binding prediction, baseline expression analysis, and zero-shot perturbation effects.
 
-![PyPI Python version](https://img.shields.io/pypi/pyversions/AlphaGenome)
-![Presubmit Checks](https://github.com/google-deepmind/alphagenome/actions/workflows/presubmit_checks.yml/badge.svg)
+## 🧬 Pipeline Overview
 
-[**Get API key**](https://deepmind.google.com/science/alphagenome) |
-[**Quick start**](#quick-start) | [**Installation**](#installation) |
-[**Documentation**](https://www.alphagenomedocs.com/) |
-[**Community**](https://www.alphagenomecommunity.com) |
-[**Terms of Use**](https://deepmind.google.com/science/alphagenome/terms)
+This pipeline combines three powerful genomic models in a streamlined workflow:
 
-The AlphaGenome API provides access to AlphaGenome, Google DeepMind’s unifying
-model for deciphering the regulatory code within DNA sequences. This repository
-contains client-side code, examples and documentation to help you use the
-AlphaGenome API.
+1. **AlphaGenome**: TF binding predictions for target genes using Google DeepMind's unified DNA sequence model
+2. **Tahoe-100M**: Baseline TF expression analysis from 100+ million single cells across 50+ cancer cell lines
+3. **ST-Tahoe State Model**: Zero-shot TF perturbation effect predictions without requiring model training
 
-AlphaGenome offers multimodal predictions, encompassing diverse functional
-outputs such as gene expression, splicing patterns, chromatin features, and
-contact maps (see [diagram below](#model_overview)). The model analyzes DNA
-sequences of up to 1 million base pairs in length and can deliver predictions at
-single base-pair resolution for most outputs. AlphaGenome achieves
-state-of-the-art performance across a range of genomic prediction benchmarks,
-including numerous diverse variant effect prediction tasks (detailed in
-[Avsec et al. 2025](https://doi.org/10.1101/2025.06.25.661532)).
+**Main Workflow**: `AlphaGenome TF prediction → Tahoe-100M DMSO_TF data → ST-Tahoe perturbation prediction`
 
-The API is offered free of charge for
-[non-commercial use](https://deepmind.google.com/science/alphagenome/terms)
-(subject to the terms of use). Query rates vary based on demand – it is well
-suited for smaller to medium-scale analyses such as analysing a limited number
-of genomic regions or variants requiring 1000s of predictions, but is likely not
-suitable for large scale analyses requiring more than 1 million predictions.
-Once you obtain your API key, you can easily get started by following our
-[Quick Start Guide](#quick-start), or watching our
-[AlphaGenome 101 tutorial](https://youtu.be/Xbvloe13nak).
+## 🚀 Quick Start
 
-<a id='model_overview'>
+### Basic Analysis
+```bash
+# Analyze single gene with organ focus
+python3 main.py --genes TP53 --organ stomach
 
-![Model overview](docs/source/_static/model_overview.png)
+# Multiple genes analysis
+python3 main.py --genes TP53,BRCA1,CLDN18 --organ lung
 
-</a>
+# Custom perturbation parameters
+python3 main.py --genes CLDN18 --perturbation-strength 0.8 --deg-p-threshold 0.01
 
-The documentation also covers a set of comprehensive tutorials, variant scoring
-strategies to efficiently score variant effects, and a visualization library to
-generate `matplotlib` figures for the different output modalities.
-
-We cover additional details of the capabilities and limitations in our
-documentation. For support and feedback:
-
--   Please submit bugs and any code-related issues on
-    [GitHub](https://github.com/google-deepmind/alphagenome/issues).
--   For general feedback, questions about usage, and/or feature requests, please
-    use the [community forum](https://www.alphagenomecommunity.com) – it’s
-    actively monitored by our team so you're likely to find answers and insights
-    faster.
--   If you can't find what you're looking for, please get in touch with the
-    AlphaGenome team on alphagenome@google.com and we will be happy to assist
-    you with questions. We’re working hard to answer all inquiries but there may
-    be a short delay in our response due to the high volume we are receiving.
-
-## Quick start
-
-The quickest way to get started is to run our example notebooks in
-[Google Colab](https://colab.research.google.com/). Here are some starter
-notebooks:
-
--   [Quick start](https://colab.research.google.com/github/google-deepmind/alphagenome/blob/main/colabs/quick_start.ipynb):
-    An introduction to quickly get you started with using the model and making
-    predictions.
--   [Visualizing predictions](https://colab.research.google.com/github/google-deepmind/alphagenome/blob/main/colabs/visualization_modality_tour.ipynb):
-    Learn how to visualize different model predictions using the visualization
-    libraries.
-
-Alternatively, you can dive straight in by following the
-[installation guide](#installation) and start writing code! Here's an example of
-making a variant prediction:
-
-```python
-from alphagenome.data import genome
-from alphagenome.models import dna_client
-from alphagenome.visualization import plot_components
-import matplotlib.pyplot as plt
-
-
-API_KEY = 'MyAPIKey'
-model = dna_client.create(API_KEY)
-
-interval = genome.Interval(chromosome='chr22', start=35677410, end=36725986)
-variant = genome.Variant(
-    chromosome='chr22',
-    position=36201698,
-    reference_bases='A',
-    alternate_bases='C',
-)
-
-outputs = model.predict_variant(
-    interval=interval,
-    variant=variant,
-    ontology_terms=['UBERON:0001157'],
-    requested_outputs=[dna_client.OutputType.RNA_SEQ],
-)
-
-plot_components.plot(
-    [
-        plot_components.OverlaidTracks(
-            tdata={
-                'REF': outputs.reference.rna_seq,
-                'ALT': outputs.alternate.rna_seq,
-            },
-            colors={'REF': 'dimgrey', 'ALT': 'red'},
-        ),
-    ],
-    interval=outputs.reference.rna_seq.interval.resize(2**15),
-    # Annotate the location of the variant as a vertical line.
-    annotations=[plot_components.VariantAnnotation([variant], alpha=0.8)],
-)
-plt.show()
+# Verbose output for debugging
+python3 main.py --genes TP53 --organ stomach --verbose
 ```
 
-## Installation
+### Advanced Options
+```bash
+# TF organ filtering for AlphaGenome predictions
+python3 main.py --genes TP53 --tf-organ stomach --organ lung
 
-<!-- mdformat off(disable for [!TIP] format) -->
+# Custom DEG thresholds
+python3 main.py --genes CLDN18 --deg-p-threshold 0.01 --deg-fc-threshold 1.0
 
-> [!TIP]
-> You may optionally wish to create a
-> [Python Virtual Environment](https://docs.python.org/3/tutorial/venv.html) to
-> prevent conflicts with your system's Python environment.
+# Top TF percentage filtering
+python3 main.py --genes TP53 --tf-percent 20 --organ stomach
+```
 
-<!-- mdformat on -->
+## 📋 Requirements
 
-To install `alphagenome`, clone a local copy of the repository and run `pip
-install`:
+### System Requirements
+- **Python**: 3.10-3.13
+- **Operating System**: macOS, Linux, Windows
+- **Memory**: 8GB+ RAM recommended
+- **Storage**: 5GB+ free space for model files and cache
+
+### Required Models & Data Sources
+
+#### 1. AlphaGenome API
+- **API Key**: Required (free for non-commercial use)
+- **Get API Key**: https://deepmind.google.com/science/alphagenome
+- **Setup**: Add `ALPHAGENOME_API_KEY=your_key_here` to `config.env`
+
+#### 2. ST-Tahoe State Model
+- **Location**: `models/state/ST-Tahoe/`
+- **Source**: Hugging Face (arcinstitute/ST-Tahoe)
+- **Files Required**:
+  - `config.yaml`
+  - `final_from_preprint.ckpt`
+  - `pert_onehot_map.pt`
+  - `cell_type_onehot_map.pkl`
+- **Auto-download**: The pipeline will attempt to download these automatically
+
+#### 3. Tahoe-100M Dataset
+- **Source**: Google Cloud Storage (arc-ctc-tahoe100 bucket)
+- **Access**: Public dataset, no credentials required
+- **Cache**: Files are cached locally in `output/bridge_cache/`
+- **Size**: ~100M cells across 50+ cancer cell lines
+
+### Package Dependencies
+
+#### Core Scientific Stack
+- `numpy >= 1.24.0`
+- `pandas >= 2.0.0`
+- `scipy >= 1.10.0`
+- `matplotlib >= 3.6.0`
+- `seaborn >= 0.12.0`
+
+#### Genomics & Single-Cell
+- `anndata >= 0.9.0`
+- `scanpy >= 1.9.0`
+- `gcsfs >= 2023.0.0` (for Tahoe-100M data access)
+
+#### Machine Learning & State Model
+- `torch >= 2.0.0`
+- `transformers >= 4.30.0`
+- State model dependencies (installed via `uv tool run --from arc-state state`)
+
+#### AlphaGenome Client
+- `grpcio >= 1.50.0`
+- `protobuf >= 4.0.0`
+- `jaxtyping >= 0.2.0`
+
+## 🛠️ Installation
+
+### 1. Clone Repository
+```bash
+git clone <repository-url>
+cd alphagenome
+```
+
+### 2. Install Package
+```bash
+# Development installation (recommended)
+pip3 install -e .
+
+# Or standard installation
+pip3 install .
+```
+
+### 3. Setup Configuration
+```bash
+# Create config.env file
+cat > config.env << EOF
+# AlphaGenome API Key (Required)
+ALPHAGENOME_API_KEY=your_api_key_here
+
+# Ensembl API timeout (seconds)
+TAHOE_ENSEMBL_TIMEOUT=10
+
+# Optional: Google Cloud Service Account for Tahoe-100M data
+# GOOGLE_APPLICATION_CREDENTIALS=/path/to/service/account/key.json
+EOF
+```
+
+### 4. Download ST-Tahoe Model (Auto or Manual)
+The pipeline will attempt to auto-download the ST-Tahoe model. If this fails:
 
 ```bash
-$ git clone https://github.com/google-deepmind/alphagenome.git
-$ pip install ./alphagenome
+# Manual download via git lfs
+git lfs clone https://huggingface.co/arcinstitute/ST-Tahoe
+mv ST-Tahoe models/state/ST-Tahoe
 ```
 
-See [the documentation](https://www.alphagenomedocs.com/installation.html) for
-information on alternative installation strategies.
+### 5. Verify Installation
+```bash
+# Test imports
+python3 -c "import main; print('✅ Pipeline ready')"
 
-## Citing `alphagenome`
+# Check help
+python3 main.py --help
+```
 
-If you use AlphaGenome in your research, please cite using:
+## 📁 Project Structure
 
-<!-- disableFinding(SNIPPET_INVALID_LANGUAGE) -->
+```
+alphagenome/
+├── main.py                           # Main pipeline entry point
+├── standardized_genomic_analyzer.py  # Core analysis engine
+├── tahoe_100M_loader.py              # Tahoe-100M data loader
+├── state_perturbation_engine.py      # ST-Tahoe model wrapper
+├── tahoe_state_bridge.py             # Data format converter
+├── deg_analyzer.py                   # Differential expression analysis
+├── config.env                        # Configuration file
+├── models/state/ST-Tahoe/            # State model files
+├── output/                           # Analysis results
+├── src/alphagenome/                  # AlphaGenome client library
+└── CLAUDE.md                         # Detailed developer documentation
+```
+
+## 🔬 Output Files
+
+### Analysis Results
+- **CSV files**: Comprehensive perturbation analysis results with timestamps
+- **Log files**: Detailed execution logs in `output/perturbation_analysis_YYYYMMDD_HHMMSS.log`
+- **Cache directories**: 
+  - `output/bridge_cache/`: Tahoe-100M H5AD files
+  - `output/state_cache/`: ST-Tahoe model cache
+  - `output/deg_analysis/`: DEG analysis results
+
+### Key Output Columns
+- `tf_name`: Transcription factor gene symbol
+- `mean_binding_score`: AlphaGenome TF binding prediction
+- `baseline_expression`: Tahoe-100M DMSO control expression
+- `perturbation_effect`: ST-Tahoe predicted expression change
+- `deg_pvalue`: Differential expression significance
+- `deg_log2fc`: Log2 fold change from perturbation
+
+## 🧪 Testing & Development
+
+### Run Tests
+```bash
+# Install hatch (build system)
+pip install hatch
+
+# Run tests on default Python version
+hatch test
+
+# Run tests on all supported Python versions (3.10-3.13)
+hatch test --all
+
+# Run specific test file
+hatch test src/alphagenome/models/dna_client_test.py
+```
+
+### Code Quality
+```bash
+# Format code (Google Python style)
+hatch run check:format
+
+# Lint code
+hatch run check:lint
+
+# Run all checks
+hatch run check:all
+```
+
+### Pipeline Validation
+```bash
+# Quick validation test
+python3 main.py --genes TP53 --organ stomach --verbose
+
+# Check logs for any issues
+tail -f output/perturbation_analysis_*.log
+```
+
+## 🔧 Model Versions
+
+| Component | Version/Source | Notes |
+|-----------|----------------|-------|
+| AlphaGenome | API (Latest) | Google DeepMind's unified DNA model |
+| ST-Tahoe | arcinstitute/ST-Tahoe | Zero-shot perturbation model |
+| Tahoe-100M | arc-ctc-tahoe100 (GCS) | 100M+ single cells, 50+ cell lines |
+| GENCODE | v46 | Human genome annotations |
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+#### 1. AlphaGenome API Key Issues
+```bash
+# Check if API key is set
+grep ALPHAGENOME_API_KEY config.env
+
+# Test API connectivity
+python3 -c "from alphagenome.models import dna_client; client = dna_client.create('your_key'); print('✅ API connected')"
+```
+
+#### 2. ST-Tahoe Model Download Fails
+```bash
+# Check model directory
+ls -la models/state/ST-Tahoe/
+
+# Manual download
+git lfs clone https://huggingface.co/arcinstitute/ST-Tahoe models/state/ST-Tahoe
+```
+
+#### 3. Tahoe-100M Data Access Issues
+```bash
+# Test GCS access
+python3 -c "import gcsfs; fs = gcsfs.GCSFileSystem(); print(fs.ls('arc-ctc-tahoe100')[:5])"
+```
+
+#### 4. Memory Issues
+- Reduce `--tf-percent` to analyze fewer TFs
+- Use `--organ` parameter to limit cell lines
+- Monitor memory usage: `top -p $(pgrep python)`
+
+### Support
+- **Code Issues**: Submit GitHub issues
+- **General Questions**: Check `CLAUDE.md` for detailed documentation
+- **Model Questions**: Refer to individual model repositories
+
+## 📄 Citation
+
+If you use this pipeline in your research, please cite the underlying models:
 
 ```bibtex
+# AlphaGenome
 @article{alphagenome,
   title={{AlphaGenome}: advancing regulatory variant effect prediction with a unified {DNA} sequence model},
-  author={Avsec, {\v Z}iga and Latysheva, Natasha and Cheng, Jun and Novati, Guido and Taylor, Kyle R. and Ward, Tom and Bycroft, Clare and Nicolaisen, Lauren and Arvaniti, Eirini and Pan, Joshua and Thomas, Raina and Dutordoir, Vincent and Perino, Matteo and De, Soham and Karollus, Alexander and Gayoso, Adam and Sargeant, Toby and Mottram, Anne and Wong, Lai Hong and Drot{\'a}r, Pavol and Kosiorek, Adam and Senior, Andrew and Tanburn, Richard and Applebaum, Taylor and Basu, Souradeep and Hassabis, Demis and Kohli, Pushmeet},
+  author={Avsec, {\v Z}iga and Latysheva, Natasha and Cheng, Jun and others},
   year={2025},
-  doi={https://doi.org/10.1101/2025.06.25.661532},
-  publisher={Cold Spring Harbor Laboratory},
-  journal={bioRxiv}
+  journal={bioRxiv},
+  doi={https://doi.org/10.1101/2025.06.25.661532}
+}
+
+# State Model
+@article{state_model,
+  title={State: an efficient representation for single-cell transcriptomics},
+  journal={In preparation},
+  year={2024}
 }
 ```
 
-<!-- enableFinding(SNIPPET_INVALID_LANGUAGE) -->
+## 📜 License
 
-## Acknowledgements
+This project builds upon several open-source components:
+- **AlphaGenome**: Apache 2.0 License (Google LLC)
+- **Pipeline Code**: MIT License
+- **ST-Tahoe Model**: Check Hugging Face repository for specific terms
 
-AlphaGenome communicates with and/or references the following separate libraries
-and packages:
+See individual model repositories for detailed licensing information.
 
-*   [Abseil](https://github.com/abseil/abseil-py)
-*   [anndata](https://github.com/scverse/anndata)
-*   [gRPC](https://github.com/grpc/grpc)
-*   [immutabledict](https://github.com/corenting/immutabledict)
-*   [intervaltree](https://github.com/chaimleib/intervaltree)
-*   [jaxtyping](https://github.com/patrick-kidger/jaxtyping)
-*   [matplotlib](https://matplotlib.org/)
-*   [ml_dtypes](https://github.com/jax-ml/ml_dtypes)
-*   [NumPy](https://numpy.org/)
-*   [pandas](https://pandas.pydata.org/)
-*   [protobuf](https://developers.google.com/protocol-buffers/)
-*   [pyarrow](https://arrow.apache.org/)
-*   [SciPy](https://scipy.org/)
-*   [seaborn](https://seaborn.pydata.org/)
-*   [tqdm](https://github.com/tqdm/tqdm)
-*   [typeguard](https://github.com/agronholm/typeguard)
-*   [typing_extensions](https://github.com/python/typing_extensions)
-*   [zstandard](https://github.com/indygreg/python-zstandard)
+---
 
-We thank all their contributors and maintainers!
-
-## License and Disclaimer
-
-Copyright 2024 Google LLC
-
-All software in this repository is licensed under the Apache License, Version
-2.0 (Apache 2.0); you may not use this except in compliance with the Apache 2.0
-license. You may obtain a copy of the Apache 2.0 license at:
-https://www.apache.org/licenses/LICENSE-2.0.
-
-Examples and documentation to help you use the AlphaGenome API are licensed
-under the Creative Commons Attribution 4.0 International License (CC-BY). You
-may obtain a copy of the CC-BY license at:
-https://creativecommons.org/licenses/by/4.0/legalcode.
-
-Unless required by applicable law or agreed to in writing, all software and
-materials distributed here under the Apache 2.0 or CC-BY licenses are
-distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
-either express or implied. See the licenses for the specific language governing
-permissions and limitations under those licenses.
-
-This is not an official Google product.
-
-### Third-party software
-
-Your use of any third-party software, libraries or code referenced in the
-materials in this repository (including the libraries listed in the
-[Acknowledgments](#acknowledgements) section) may be governed by separate terms
-and conditions or license provisions. Your use of the third-party software,
-libraries or code is subject to any such terms and you should check that you can
-comply with any applicable restrictions or terms and conditions before use.
-
-### Reference Datasets
-
-A modified version of the GENCODE dataset (which can be found here:
-https://www.gencodegenes.org/human/releases.html) is released with the client
-code package for illustrative purposes, and is available with reference to the
-following:
-
--   Copyright © 2024 EMBL-EBI
--   The GENCODE dataset is subject to the EMBL-EBI terms of use, available at
-    https://www.ebi.ac.uk/about/terms-of-use.
--   Citation: Frankish A, et al (2018) GENCODE reference annotation for the
-    human and mouse genome.
--   Further details about GENCODE can be found at
-    https://www.gencodegenes.org/human/releases.html, with additional citation
-    information at https://www.gencodegenes.org/pages/publications.html and
-    further acknowledgements can be found at
-    https://www.gencodegenes.org/pages/gencode.html.
+**Pipeline Workflow**: AlphaGenome TF prediction → Tahoe-100M DMSO_TF data → ST-Tahoe perturbation prediction 🧬✨

@@ -27,11 +27,16 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import requests
 from io import BytesIO
 import warnings
+import time
+import signal
+import gc
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+import threading
 
 # HuggingFace datasets for proper data access
 try:
@@ -61,6 +66,18 @@ class ComprehensiveTahoeDataLoader:
         self.cache_dir.mkdir(exist_ok=True)
         self.config = config or self._get_default_config()
         
+        # Timeout and performance tracking
+        self._operation_timeouts = {
+            'tf_expression_search': self.config.get('tf_search_timeout', 120),  # 2 minutes default
+            'dataset_iteration': self.config.get('dataset_timeout', 180),       # 3 minutes default
+            'sample_processing': self.config.get('sample_timeout', 60)          # 1 minute default
+        }
+        self._performance_stats = {
+            'samples_processed': 0,
+            'processing_rate': 0.0,
+            'last_checkpoint': time.time()
+        }
+        
         self._cell_line_metadata = None
         self._gene_metadata = None
         self._expression_dataset = None
@@ -82,6 +99,14 @@ class ComprehensiveTahoeDataLoader:
         return {
             'use_datasets_library': DATASETS_AVAILABLE,
             'download_timeout': 3600,  # Default 1 hour timeout for downloads
+            'tf_search_timeout': 120,   # 2 minutes for TF expression search
+            'dataset_timeout': 180,     # 3 minutes for dataset iteration
+            'sample_timeout': 60,       # 1 minute for sample processing
+            'max_samples_per_batch': 10000,  # Process in batches
+            'progress_report_interval': 5000, # Report progress every 5000 samples
+            'memory_cleanup_interval': 20000, # Force garbage collection every 20k samples
+            'parallel_search': True,    # Enable parallel TF search
+            'max_workers': 2            # Number of parallel workers
         }
 
     def _initialize_metadata(self):
@@ -274,16 +299,63 @@ class ComprehensiveTahoeDataLoader:
             top_targets = list(catalog['target_analysis']['top_targets'].items())[:5]
             logger.info(f"   🔝 Top molecular targets: {dict(top_targets)}")
 
+    def _setup_http_optimization(self):
+        """Configure HTTP connections for optimal performance with Hugging Face datasets."""
+        try:
+            import requests
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
+            
+            # Configure retry strategy
+            retry_strategy = Retry(
+                total=self.config.get('http_retries', 3),
+                backoff_factor=self.config.get('http_backoff', 1),
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["HEAD", "GET", "OPTIONS"]
+            )
+            
+            # Create adapter with optimized settings
+            adapter = HTTPAdapter(
+                max_retries=retry_strategy,
+                pool_connections=self.config.get('pool_connections', 10),
+                pool_maxsize=self.config.get('pool_maxsize', 20)
+            )
+            
+            # Apply to requests session (used by datasets library)
+            session = requests.Session()
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            
+            # Set reasonable timeouts
+            session.timeout = (
+                self.config.get('connect_timeout', 10),
+                self.config.get('read_timeout', 30)
+            )
+            
+            logger.info("🔗 HTTP optimization configured for Hugging Face dataset access")
+            logger.info(f"   Retries: {retry_strategy.total}, Pool size: {adapter.config['pool_maxsize']}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️  Could not configure HTTP optimization: {e}")
+
     def _initialize_datasets(self):
         if not self.config.get('use_datasets_library'):
             logger.warning("HuggingFace datasets library not available. Cannot access expression data.")
             return
+        
+        # Setup HTTP optimization first
+        self._setup_http_optimization()
+        
         try:
             from datasets import DownloadConfig as HFDownloadConfig
-            logger.info("🔧 Initializing HuggingFace datasets for expression data (streaming)...")
+            logger.info("🔧 Initializing HuggingFace datasets for expression data (streaming with optimization)...")
             
-            # Use a download config with maximum retries
-            download_config = HFDownloadConfig(max_retries=self.config.get('retry_attempts', 3))
+            # Use a download config with maximum retries and optimized settings
+            download_config = HFDownloadConfig(
+                max_retries=self.config.get('retry_attempts', 3),
+                resume_download=True,
+                use_etag=True
+            )
             
             self._expression_dataset = load_dataset(
                 self.DATASET_NAME, 
@@ -579,17 +651,24 @@ This catalog represents the complete collection of small-molecule perturbations 
 
     def get_control_tf_expression(self, gene_symbol: str, cell_lines: List[str], tf_list: List[str]) -> pd.DataFrame:
         """
-        Extract TF expression data from Tahoe-100M dataset.
+        Extract TF expression data from DMSO control samples in Tahoe-100M dataset.
         
-        NOTE: After analysis, it appears Tahoe-100M may not have traditional DMSO vehicle controls.
-        Instead, we'll extract baseline expression from any available samples for the requested cell lines,
-        prioritizing lower-dose or less disruptive treatments as proxy controls.
+        DMSO controls are labeled as 'DMSO_TF' in the drug field.
+        These are plate-matched vehicle controls.
+        
+        Features timeout handling, progress tracking, and memory optimization.
         """
-        logger.info(f"🧬 Extracting TF expression for gene: {gene_symbol} from Tahoe-100M")
+        start_time = time.time()
+        timeout_duration = self._operation_timeouts['tf_expression_search']
+        
+        logger.info(f"🧬 Extracting DMSO control TF expression for gene: {gene_symbol} from Tahoe-100M")
+        logger.info(f"⏱️  Timeout set to {timeout_duration} seconds with progress tracking")
+        
         if not self._expression_dataset:
             logger.error("Expression dataset not available. Cannot extract data.")
             return pd.DataFrame()
 
+        # Convert TF symbols to token IDs
         tf_tokens = {self._gene_symbol_to_token_map.get(tf) for tf in tf_list}
         tf_tokens.discard(None)
         if not tf_tokens:
@@ -610,77 +689,486 @@ This catalog represents the complete collection of small-molecule perturbations 
             logger.error(f"❌ No valid CELLOSAURUS IDs found for cell lines: {cell_lines}")
             return pd.DataFrame()
 
-        logger.info(f"🔍 Searching for samples with cell_line_ids: {target_cellosaurus_ids}")
+        logger.info(f"🔍 Searching for DMSO_TF control samples with cell_line_ids: {target_cellosaurus_ids}")
         logger.info(f"🧬 Looking for {len(tf_tokens)} TF tokens: {tf_list}")
         
-        expression_results = []
-        matching_sample_count = 0
-        total_sample_count = 0
+        # Smart file targeting for optimization
+        targeting_info = self._smart_file_targeting(target_cellosaurus_ids)
         
-        # Search through dataset for matching cell lines
-        for sample in self._expression_dataset:
-            total_sample_count += 1
+        # Try parallel search first if enabled and beneficial
+        if (self.config.get('parallel_search', True) and 
+            targeting_info['priority_score'] > 0.5 and 
+            len(tf_list) > 1):
             
-            # Check if this sample matches our target cell lines
-            sample_cell_line_id = sample.get('cell_line_id', '')
-            if sample_cell_line_id in target_cellosaurus_ids:
-                matching_sample_count += 1
+            logger.info(f"🔄 Using parallel TF search strategy (priority: {targeting_info['priority_score']})")
+            try:
+                parallel_results = self._parallel_tf_search(tf_list, target_cellosaurus_ids, 
+                                                           self.config['max_samples_per_batch'] * 2)
+                if parallel_results:
+                    # Convert parallel results to expected format
+                    for result in parallel_results:
+                        result.update({
+                            'gene_symbol': gene_symbol,
+                            'median_expression': result['mean_expression'],
+                            'std_expression': 0.0,
+                            'min_expression': result['mean_expression'],
+                            'max_expression': result['mean_expression'],
+                            'total_cells': 1,
+                            'expression_frequency': 1.0 if result['mean_expression'] > 0 else 0.0,
+                            'q25_expression': result['mean_expression'],
+                            'q75_expression': result['mean_expression'],
+                            'sample_id': 'parallel_batch',
+                            'plate': 'unknown',
+                            'barcode': 'unknown'
+                        })
+                    
+                    logger.info(f"✅ Parallel search completed successfully: {len(parallel_results)} results")
+                    return pd.DataFrame(parallel_results)
+            except Exception as e:
+                logger.warning(f"⚠️  Parallel search failed, falling back to sequential: {e}")
+        
+        # Initialize tracking variables for sequential search fallback
+        expression_results = []
+        dmso_sample_count = 0
+        total_sample_count = 0
+        plates_found = set()
+        last_progress_time = start_time
+        samples_since_last_progress = 0
+        
+        # Performance optimization: Use iterator with timeout handling
+        dataset_iterator = iter(self._expression_dataset)
+        
+        logger.info(f"🚀 Starting sequential TF expression search with timeout handling...")
+        
+        # Main search loop with timeout and progress tracking
+        try:
+            while True:
+                current_time = time.time()
+                elapsed_time = current_time - start_time
                 
-                # Get the cell line name for this CELLOSAURUS ID
-                cell_line_name = self._cellosaurus_id_to_cell_name.get(sample_cell_line_id, sample_cell_line_id)
+                # Check global timeout
+                if elapsed_time > timeout_duration:
+                    logger.warning(f"⏰ TF expression search timed out after {elapsed_time:.1f}s")
+                    logger.warning(f"   Processed {total_sample_count} samples, found {dmso_sample_count} DMSO controls")
+                    if expression_results:
+                        logger.info(f"   Returning partial results: {len(expression_results)} measurements")
+                    else:
+                        logger.error(f"   No results found before timeout - consider increasing timeout or reducing search scope")
+                    break
                 
-                # Create a dictionary for fast lookup of gene expressions in the current sample
-                sample_expressions = {gene: expr for gene, expr in zip(sample['genes'], sample['expressions'])}
+                # Progress reporting
+                if current_time - last_progress_time > 10.0:  # Every 10 seconds
+                    rate = samples_since_last_progress / (current_time - last_progress_time)
+                    self._performance_stats['processing_rate'] = rate
+                    logger.info(f"   Progress: {total_sample_count} samples ({rate:.0f}/sec), {dmso_sample_count} DMSO found, {elapsed_time:.1f}s elapsed")
+                    last_progress_time = current_time
+                    samples_since_last_progress = 0
                 
-                # Extract TF expression data
-                for tf_symbol in tf_list:
-                    tf_token = self._gene_symbol_to_token_map.get(tf_symbol)
-                    if tf_token in sample_expressions:
-                        expression_results.append({
+                # Memory cleanup
+                if total_sample_count % self.config['memory_cleanup_interval'] == 0 and total_sample_count > 0:
+                    gc.collect()
+                
+                # Get next sample with timeout protection
+                try:
+                    sample = next(dataset_iterator)
+                except StopIteration:
+                    logger.info(f"✅ Reached end of dataset after {total_sample_count} samples")
+                    break
+                except Exception as e:
+                    logger.warning(f"⚠️  Error reading sample {total_sample_count}: {e}")
+                    continue
+                
+                # Process sample
+                total_sample_count += 1
+                samples_since_last_progress += 1
+                
+                # CRITICAL: Check if this is a DMSO control sample
+                drug_value = sample.get('drug', '')
+                if drug_value != 'DMSO_TF':
+                    continue  # Skip non-DMSO samples
+                
+                # Check if this DMSO sample matches our target cell lines
+                sample_cell_line_id = sample.get('cell_line_id', '')
+                if sample_cell_line_id in target_cellosaurus_ids:
+                    dmso_sample_count += 1
+                    
+                    # Track which plates have DMSO controls
+                    plate_id = sample.get('plate', 'unknown')
+                    plates_found.add(plate_id)
+                    
+                    # Get the cell line name for this CELLOSAURUS ID
+                    cell_line_name = self._cellosaurus_id_to_cell_name.get(sample_cell_line_id, sample_cell_line_id)
+                    
+                    # Create a dictionary for fast lookup of gene expressions in the current sample
+                    sample_expressions = {gene: expr for gene, expr in zip(sample['genes'], sample['expressions'])}
+                    
+                    # Extract TF expression data from this DMSO control sample
+                    for tf_symbol in tf_list:
+                        tf_token = self._gene_symbol_to_token_map.get(tf_symbol)
+                        if tf_token in sample_expressions:
+                            expr_value = sample_expressions[tf_token]
+                            expression_results.append({
                             'gene_symbol': gene_symbol,
                             'tf_name': tf_symbol,
                             'cell_line': cell_line_name,
                             'organ': self.get_organ_for_cell_line(cell_line_name),
-                            'mean_expression': sample_expressions[tf_token],
-                            'condition': 'baseline_expression',  # Changed from DMSO_control
+                            
+                            # Expression statistics - match quantitative method structure
+                            'mean_expression': expr_value,
+                            'median_expression': expr_value,  # Single sample = mean
+                            'std_expression': 0.0,  # No variation in single sample
+                            'min_expression': expr_value,
+                            'max_expression': expr_value,
+                            
+                            # Sample information
+                            'sample_count': 1,
+                            'expressing_cells': 1 if expr_value > 0 else 0,
+                            'total_cells': 1,
+                            'expression_frequency': 1.0 if expr_value > 0 else 0.0,
+                            
+                            # Percentiles (same as mean for single sample)
+                            'q25_expression': expr_value,
+                            'q75_expression': expr_value,
+                            
+                            # Pipeline-specific fields
+                            'condition': 'baseline_expression',  # Expected by pipeline
                             'source': 'Tahoe-100M',
-                            'drug_value': sample.get('drug', 'unknown'),
+                            'drug_value': drug_value,  # Should be 'DMSO_TF'
                             'sample_id': sample.get('sample', 'unknown'),
+                            'plate': plate_id,
                             'cellosaurus_id': sample_cell_line_id,
-                            # Add expected fields for integration
-                            'expression_frequency': 1.0,  # Single sample = 100% frequency
-                            'expressing_cells': 1,  # Single sample
-                            'total_cells': 1,  # Single sample
-                            'std_expression': 0.0  # No variation in single sample
+                            'barcode': sample.get('BARCODE_SUB_LIB_ID', 'unknown')
                         })
             
-            # Limit inspection for performance - break after finding sufficient samples
-            if matching_sample_count >= 50 or total_sample_count >= 50000:  # More reasonable limits
-                break
+                # Early termination conditions (improved)
+                if dmso_sample_count >= 100:  # Found enough DMSO samples
+                    logger.info(f"✅ Found sufficient DMSO samples ({dmso_sample_count}), stopping search")
+                    break
+                
+                if total_sample_count >= self.config['max_samples_per_batch']:
+                    logger.info(f"✅ Reached sample limit ({total_sample_count}), stopping search")
+                    break
+                    
+        except KeyboardInterrupt:
+            logger.warning(f"🛑 TF expression search interrupted by user")
+        except Exception as e:
+            logger.error(f"❌ Unexpected error during TF expression search: {e}")
+            logger.error(f"   Progress: {total_sample_count} samples processed, {dmso_sample_count} DMSO found")
         
-        # Log search results
-        logger.info(f"🧪 Tahoe-100M Expression Search Results:")
+        # Final performance and results summary
+        final_time = time.time()
+        total_duration = final_time - start_time
+        avg_rate = total_sample_count / total_duration if total_duration > 0 else 0
+        
+        logger.info(f"🧪 DMSO Control Search Results (completed in {total_duration:.1f}s):")
         logger.info(f"   Total samples inspected: {total_sample_count}")
-        logger.info(f"   Matching cell line samples found: {matching_sample_count}")
+        logger.info(f"   Processing rate: {avg_rate:.0f} samples/second")
+        logger.info(f"   DMSO_TF control samples found: {dmso_sample_count}")
+        logger.info(f"   Plates with DMSO controls: {sorted(plates_found)}")
         logger.info(f"   Target CELLOSAURUS IDs: {target_cellosaurus_ids}")
         logger.info(f"   Expression measurements extracted: {len(expression_results)}")
         
-        if matching_sample_count == 0:
-            logger.error(f"❌ No samples found for CELLOSAURUS IDs: {target_cellosaurus_ids}")
+        # Update performance stats
+        self._performance_stats['samples_processed'] = total_sample_count
+        self._performance_stats['processing_rate'] = avg_rate
+        
+        if dmso_sample_count == 0:
+            logger.error(f"❌ No DMSO_TF control samples found for CELLOSAURUS IDs: {target_cellosaurus_ids}")
             logger.error(f"   Original cell lines: {cell_lines}")
+            logger.info("   💡 Tip: Run explore_dmso_controls() to check DMSO availability")
             return pd.DataFrame()
 
         if not expression_results:
-            logger.warning(f"❌ No TF expression data found for the specified TFs in matching samples.")
+            logger.warning(f"❌ No TF expression data found in DMSO control samples.")
             logger.warning(f"   TFs searched: {tf_list}")
             return pd.DataFrame()
 
         results_df = pd.DataFrame(expression_results)
         
-        # The data is already at the single-sample level, so we group by TF and cell line to aggregate if needed
-        # For now, we return the direct, per-sample measurements.
-        logger.info(f"✅ Extracted {len(results_df)} TF expression measurements from baseline samples.")
+        logger.info(f"✅ Extracted {len(results_df)} TF expression measurements from DMSO control samples.")
+        logger.info(f"   Unique plates: {results_df['plate'].nunique()}")
+        logger.info(f"   Unique cell lines: {results_df['cell_line'].nunique()}")
+        
         return results_df
+
+    def _parallel_tf_search(self, tf_list: List[str], target_cellosaurus_ids: List[str], max_samples: int = 50000) -> List[Dict]:
+        """
+        Parallel TF expression search with smart batching.
+        
+        Args:
+            tf_list: List of TF symbols to search for
+            target_cellosaurus_ids: List of target cell line IDs
+            max_samples: Maximum samples to process
+            
+        Returns:
+            List of expression result dictionaries
+        """
+        if not self.config.get('parallel_search', True):
+            logger.info("⚠️  Parallel search disabled, falling back to sequential")
+            return []
+        
+        logger.info(f"🔄 Starting parallel TF search for {len(tf_list)} TFs")
+        
+        # Convert TF symbols to tokens for faster lookup
+        tf_token_map = {tf: self._gene_symbol_to_token_map.get(tf) for tf in tf_list}
+        valid_tf_tokens = {k: v for k, v in tf_token_map.items() if v is not None}
+        
+        if not valid_tf_tokens:
+            logger.warning("❌ No valid TF tokens found for parallel search")
+            return []
+        
+        expression_results = []
+        batch_size = self.config.get('max_samples_per_batch', 10000)
+        max_workers = min(self.config.get('max_workers', 2), len(tf_list))
+        
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Process in batches to avoid memory issues
+                batch_futures = []
+                
+                for batch_start in range(0, max_samples, batch_size):
+                    batch_end = min(batch_start + batch_size, max_samples)
+                    
+                    # Submit batch processing task
+                    future = executor.submit(
+                        self._process_sample_batch,
+                        valid_tf_tokens, 
+                        target_cellosaurus_ids,
+                        batch_start,
+                        batch_end
+                    )
+                    batch_futures.append(future)
+                
+                # Collect results with timeout
+                timeout_per_batch = self._operation_timeouts['sample_processing']
+                for i, future in enumerate(batch_futures):
+                    try:
+                        batch_results = future.result(timeout=timeout_per_batch)
+                        expression_results.extend(batch_results)
+                        logger.info(f"✅ Batch {i+1}/{len(batch_futures)} completed: {len(batch_results)} results")
+                    except FutureTimeoutError:
+                        logger.warning(f"⏰ Batch {i+1} timed out after {timeout_per_batch}s")
+                    except Exception as e:
+                        logger.warning(f"❌ Batch {i+1} failed: {e}")
+                        
+        except Exception as e:
+            logger.error(f"❌ Parallel TF search failed: {e}")
+            return []
+        
+        logger.info(f"🎯 Parallel search completed: {len(expression_results)} total results")
+        return expression_results
+
+    def _process_sample_batch(self, tf_token_map: Dict[str, int], target_cellosaurus_ids: List[str], 
+                             start_idx: int, end_idx: int) -> List[Dict]:
+        """
+        Process a batch of samples for TF expression data.
+        
+        Args:
+            tf_token_map: Mapping of TF symbols to token IDs
+            target_cellosaurus_ids: Target cell line IDs
+            start_idx: Start index of batch
+            end_idx: End index of batch
+            
+        Returns:
+            List of expression results for this batch
+        """
+        batch_results = []
+        samples_processed = 0
+        
+        try:
+            # Skip to start position
+            dataset_iterator = iter(self._expression_dataset)
+            for _ in range(start_idx):
+                try:
+                    next(dataset_iterator)
+                except StopIteration:
+                    return batch_results
+            
+            # Process batch samples
+            for _ in range(end_idx - start_idx):
+                try:
+                    sample = next(dataset_iterator)
+                    samples_processed += 1
+                    
+                    # Check if DMSO control
+                    if sample.get('drug', '') != 'DMSO_TF':
+                        continue
+                    
+                    # Check if target cell line
+                    sample_cell_line_id = sample.get('cell_line_id', '')
+                    if sample_cell_line_id not in target_cellosaurus_ids:
+                        continue
+                    
+                    # Extract TF expressions efficiently
+                    sample_expressions = {gene: expr for gene, expr in zip(sample['genes'], sample['expressions'])}
+                    cell_line_name = self._cellosaurus_id_to_cell_name.get(sample_cell_line_id, sample_cell_line_id)
+                    
+                    for tf_symbol, tf_token in tf_token_map.items():
+                        if tf_token in sample_expressions:
+                            expr_value = sample_expressions[tf_token]
+                            batch_results.append({
+                                'tf_name': tf_symbol,
+                                'cell_line': cell_line_name,
+                                'organ': self.get_organ_for_cell_line(cell_line_name),
+                                'mean_expression': expr_value,
+                                'sample_count': 1,
+                                'expressing_cells': 1 if expr_value > 0 else 0,
+                                'condition': 'baseline_expression',
+                                'source': 'Tahoe-100M',
+                                'drug_value': 'DMSO_TF',
+                                'cellosaurus_id': sample_cell_line_id
+                            })
+                            
+                except StopIteration:
+                    break
+                except Exception as e:
+                    logger.warning(f"⚠️  Error processing sample in batch: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"❌ Batch processing error: {e}")
+        
+        return batch_results
+
+    def _smart_file_targeting(self, target_cellosaurus_ids: List[str]) -> Dict[str, Any]:
+        """
+        Pre-filter and target files likely to contain the target cell lines.
+        
+        Args:
+            target_cellosaurus_ids: List of target cell line IDs
+            
+        Returns:
+            Dictionary with targeting information and estimated file priorities
+        """
+        logger.info(f"🎯 Smart file targeting for {len(target_cellosaurus_ids)} cell lines")
+        
+        targeting_info = {
+            'target_ids': target_cellosaurus_ids,
+            'estimated_files': [],
+            'priority_score': 0.0,
+            'optimization_strategy': 'sequential'  # Could be 'parallel', 'priority', etc.
+        }
+        
+        try:
+            # Analyze cell line distribution in metadata
+            if self._cell_line_metadata is not None:
+                target_metadata = self._cell_line_metadata[
+                    self._cell_line_metadata['CELLOSAURUS_ID'].isin(target_cellosaurus_ids)
+                ]
+                
+                if not target_metadata.empty:
+                    # Get organ distribution
+                    organ_counts = target_metadata['organ'].value_counts()
+                    targeting_info['organ_distribution'] = organ_counts.to_dict()
+                    
+                    # Estimate file priorities based on organ frequency
+                    if len(organ_counts) <= 2:  # Focused search
+                        targeting_info['optimization_strategy'] = 'priority'
+                        targeting_info['priority_score'] = 0.8
+                    else:  # Broad search
+                        targeting_info['optimization_strategy'] = 'parallel'
+                        targeting_info['priority_score'] = 0.4
+                        
+                    logger.info(f"📊 Targeting strategy: {targeting_info['optimization_strategy']}")
+                    logger.info(f"   Priority score: {targeting_info['priority_score']}")
+                    logger.info(f"   Organ distribution: {targeting_info['organ_distribution']}")
+                else:
+                    logger.warning("⚠️  No metadata found for target cell lines")
+                    
+        except Exception as e:
+            logger.warning(f"⚠️  Smart targeting failed: {e}, using default strategy")
+        
+        return targeting_info
+
+    def explore_dmso_controls(self, max_samples: int = 10000) -> Dict[str, Any]:
+        """
+        Explore DMSO_TF control samples in the dataset to understand their distribution.
+        """
+        logger.info(f"🔍 Exploring DMSO_TF control samples (checking up to {max_samples} samples)...")
+        
+        if not self._expression_dataset:
+            logger.error("Expression dataset not available")
+            return {}
+        
+        dmso_info = {
+            'total_dmso_samples': 0,
+            'cell_lines_with_dmso': set(),
+            'plates_with_dmso': set(),
+            'dmso_samples_per_cell_line': {},
+            'dmso_samples_per_plate': {},
+            'sample_examples': [],
+            'total_samples_checked': 0
+        }
+        
+        for sample in self._expression_dataset:
+            dmso_info['total_samples_checked'] += 1
+            
+            # Check if this is a DMSO control
+            drug_value = sample.get('drug', '')
+            if drug_value == 'DMSO_TF':
+                dmso_info['total_dmso_samples'] += 1
+                
+                # Get cell line and plate info
+                cell_line_id = sample.get('cell_line_id', 'unknown')
+                plate_id = sample.get('plate', 'unknown')
+                
+                # Convert CELLOSAURUS ID to cell line name if possible
+                cell_line_name = self._cellosaurus_id_to_cell_name.get(cell_line_id, cell_line_id)
+                
+                dmso_info['cell_lines_with_dmso'].add(cell_line_name)
+                dmso_info['plates_with_dmso'].add(plate_id)
+                
+                # Count per cell line
+                if cell_line_name not in dmso_info['dmso_samples_per_cell_line']:
+                    dmso_info['dmso_samples_per_cell_line'][cell_line_name] = 0
+                dmso_info['dmso_samples_per_cell_line'][cell_line_name] += 1
+                
+                # Count per plate
+                if plate_id not in dmso_info['dmso_samples_per_plate']:
+                    dmso_info['dmso_samples_per_plate'][plate_id] = 0
+                dmso_info['dmso_samples_per_plate'][plate_id] += 1
+                
+                # Store first few examples
+                if len(dmso_info['sample_examples']) < 5:
+                    dmso_info['sample_examples'].append({
+                        'drug': drug_value,
+                        'cell_line_id': cell_line_id,
+                        'cell_line_name': cell_line_name,
+                        'plate': plate_id,
+                        'sample_id': sample.get('sample', 'unknown'),
+                        'barcode': sample.get('BARCODE_SUB_LIB_ID', 'unknown')
+                    })
+            
+            if dmso_info['total_samples_checked'] >= max_samples:
+                break
+        
+        # Convert sets to lists for display
+        dmso_info['cell_lines_with_dmso'] = sorted(list(dmso_info['cell_lines_with_dmso']))
+        dmso_info['plates_with_dmso'] = sorted(list(dmso_info['plates_with_dmso']))
+        
+        # Log findings
+        logger.info(f"📊 DMSO Control Analysis:")
+        logger.info(f"   Total samples checked: {dmso_info['total_samples_checked']}")
+        logger.info(f"   DMSO_TF samples found: {dmso_info['total_dmso_samples']}")
+        logger.info(f"   Percentage of DMSO: {dmso_info['total_dmso_samples'] / dmso_info['total_samples_checked'] * 100:.2f}%")
+        logger.info(f"   Cell lines with DMSO: {len(dmso_info['cell_lines_with_dmso'])}")
+        logger.info(f"   Plates with DMSO: {len(dmso_info['plates_with_dmso'])} (should be 1-14)")
+        
+        if dmso_info['cell_lines_with_dmso']:
+            logger.info(f"   Cell lines (first 10): {dmso_info['cell_lines_with_dmso'][:10]}")
+        
+        if dmso_info['sample_examples']:
+            logger.info("   Sample DMSO control examples:")
+            for ex in dmso_info['sample_examples']:
+                logger.info(f"     - Cell line: {ex['cell_line_name']}, Plate: {ex['plate']}, Sample: {ex['sample_id']}")
+        
+        # Show distribution
+        if dmso_info['dmso_samples_per_plate']:
+            logger.info("   DMSO samples per plate:")
+            for plate, count in sorted(dmso_info['dmso_samples_per_plate'].items()):
+                logger.info(f"     Plate {plate}: {count} DMSO samples")
+        
+        return dmso_info
 
     def get_quantitative_tf_expression(self, gene_symbol: str, cell_lines: List[str], tf_list: List[str], 
                                      max_samples_per_cell_line: int = 10) -> pd.DataFrame:

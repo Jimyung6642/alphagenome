@@ -149,7 +149,12 @@ class StandardizedGenomicAnalyzer:
                 logger.info("✅ AlphaGenome client initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize AlphaGenome client: {e}")
-                raise RuntimeError(f"AlphaGenome initialization failed: {e}")
+                logger.error("   Common fixes:")
+                logger.error("   1. Check that config.env exists with ALPHAGENOME_API_KEY=your_key_here")
+                logger.error("   2. Verify API key is valid (get from https://deepmind.google.com/science/alphagenome)")
+                logger.error("   3. Check internet connectivity")
+                logger.error("   4. Ensure AlphaGenome package is properly installed: pip install -e .")
+                raise RuntimeError(f"AlphaGenome initialization failed: {e}. Pipeline cannot proceed without AlphaGenome API access.")
         else:
             raise ImportError("AlphaGenome modules required for genomic analysis")
         
@@ -172,7 +177,12 @@ class StandardizedGenomicAnalyzer:
                 logger.info("✅ Tahoe-100M data loader initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Tahoe loader: {e}")
-                raise RuntimeError(f"Tahoe-100M initialization failed: {e}")
+                logger.error("   Common fixes:")
+                logger.error("   1. Check internet connectivity for Tahoe-100M data access")
+                logger.error("   2. Verify GCS authentication: gcloud auth application-default login")
+                logger.error("   3. Install missing dependencies: pip install datasets gcsfs")
+                logger.error("   4. Check that Tahoe-100M dataset is accessible")
+                raise RuntimeError(f"Tahoe-100M initialization failed: {e}. Pipeline requires Tahoe-100M single-cell data access.")
         else:
             raise ImportError("ComprehensiveTahoeDataLoader required for real transcriptome data")
         
@@ -309,7 +319,7 @@ class StandardizedGenomicAnalyzer:
                 prioritized_cell_lines = self.tahoe_loader.get_available_cell_lines()
             
             # Apply max_cell_lines limit if specified
-            if self.config['max_cell_lines']:
+            if self.config.get('max_cell_lines'):
                 prioritized_cell_lines = prioritized_cell_lines[:self.config['max_cell_lines']]
             
             analysis_type = f"{focus_organ}-prioritized" if focus_organ else "comprehensive"
@@ -515,12 +525,11 @@ class StandardizedGenomicAnalyzer:
                 ontology_count = tf_predictions[tf_predictions['tf_name'] == tf_name]['ontology_term'].nunique()
                 logger.info(f"     {tf_name}: {count} predictions from {ontology_count} ontologies")
             
-            # Use enhanced quantitative expression extraction
-            tahoe_expression = self.tahoe_loader.get_quantitative_tf_expression(
+            # Use DMSO control expression extraction for baseline data
+            tahoe_expression = self.tahoe_loader.get_control_tf_expression(
                 gene_symbol=gene_symbol,
                 cell_lines=cell_lines,
-                tf_list=tf_names,
-                max_samples_per_cell_line=25  # Reasonable sample size for statistical robustness
+                tf_list=tf_names
             )
             
             if tahoe_expression.empty:
